@@ -343,6 +343,69 @@ check("патруль за станцией не рисуется",
       count_col(canvas, (150, 245, 255)) < 12,
       "пикселей %d" % count_col(canvas, (150, 245, 255)))
 
+# --- регрессия: спиной к станции кадр не должен заливаться серым ---------
+# Причина бага: точке ЗА камерой подставлялся zc = MIN_Z, а xc оставался прежним —
+# точка «перелетала» на другую сторону, четырёхугольник выворачивался наизнанку и
+# заливал кадр одной краской. Теперь такие точки не проецируются, а полигон
+# честно отсекается по ближней плоскости.
+def dominant(surf):
+    """Доля самого частого цвета в окне вида (без кабины и панели)."""
+    cnt = {}
+    tot = 0
+    for y in range(10, 138, 2):
+        for x in range(8, 312, 2):
+            c = tuple(surf.get_at((x, y))[:3])
+            cnt[c] = cnt.get(c, 0) + 1
+            tot += 1
+    top = max(cnt, key=lambda c: cnt[c])
+    return cnt[top] / float(tot), top
+
+
+c3 = pygame.Surface((CANVAS_W, CANVAS_H))
+worst = (0.0, None, None)
+for gy_ in (46, 47, 48, 30, 20):
+    for yaw in (0, 45, 90, 135, 180, 225, 270, 315):
+        sh_g = Ship(57, gy_, yaw)
+        sh_g.snap()
+        render.draw_frame(c3, World(), sh_g, stars, 1.0)
+        share, col = dominant(c3)
+        if share > worst[0]:
+            worst = (share, (gy_, yaw), col)
+check("кадр не залит одним цветом ни в одном из 40 положений",
+      worst[0] < 0.72,
+      "максимум %.0f%% цвета %s при y=%d, курсе %d"
+      % (worst[0] * 100, worst[2], worst[1][0], worst[1][1]))
+
+sh_b = Ship(57, 47, 180)          # прижался к станции спиной
+sh_b.snap()
+render.draw_frame(c3, World(), sh_b, stars, 1.0)
+grey = tot = 0
+for y in range(10, 138, 2):
+    for x in range(8, 312, 2):
+        r, g, b = tuple(c3.get_at((x, y))[:3])
+        tot += 1
+        if r > 60 and g > 60 and b > 60 and max(r, g, b) - min(r, g, b) < 45:
+            grey += 1
+check("спиной к станции видно космос, а не серую заливку",
+      grey / float(tot) < 0.08, "серых пикселей %.1f%%" % (100.0 * grey / tot))
+
+cam_b = render.Camera(57.5, 46.5, 180.0)   # смотрит в −y
+check("точка за камерой не проецируется вовсе",
+      cam_b.project(57.5, 50.0, 0.9) is None
+      and cam_b.project(57.5, 40.0, 0.9) is not None,
+      "позади %s, впереди %s" % (cam_b.project(57.5, 50.0, 0.9),
+                                 bool(cam_b.project(57.5, 40.0, 0.9))))
+
+quad_cut = [(0.0, 0.0, -1.0), (2.0, 0.0, 2.0), (2.0, 2.0, 2.0), (0.0, 2.0, -1.0)]
+cut = render.clip_near(quad_cut)
+check("полигон, режущий ближнюю плоскость, отсекается по ней",
+      len(cut) == 4 and all(p[2] >= render.MIN_Z - 1e-9 for p in cut),
+      "вершин после отсечения %d, минимальная z %.3f"
+      % (len(cut), min(p[2] for p in cut)))
+
+check("грань целиком за камерой не рисуется",
+      render.cam_poly(cam_b, [(0.0, 0.0, -1.0), (2.0, 0.0, -2.0), (1.0, 1.0, -3.0)]) is None)
+
 # --- шрифт --------------------------------------------------------------
 hud = ["ДО СТАНЦИИ 17,5 КЛ", "КУРС 045°  ХОД 65",
        "A D < > ПОВОРОТ 45   Q E СНОС", "СТАНЦИЯ 16,6", "СТОЛКНОВЕНИЕ",

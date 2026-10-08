@@ -19,22 +19,34 @@ class Camera:
         a = math.radians(yaw_deg)
         self.sa, self.ca = math.sin(a), math.cos(a)
 
-    def project(self, wx, wy, h, clamp=True):
-        """Мир (x, y, высота) -> экран. Возвращает (sx, sy, zc) или None."""
+    def to_cam(self, wx, wy, h):
+        """Мир -> координаты камеры: (xc — вбок, yc — вверх, zc — вперёд)."""
         dx = wx - self.x
         dy = wy - self.y
-        zc = dx * self.sa + dy * self.ca
-        xc = dx * self.ca - dy * self.sa
-        yc = h - EYE
+        return (dx * self.ca - dy * self.sa, h - EYE, dx * self.sa + dy * self.ca)
+
+    def to_screen(self, p):
+        xc, yc, zc = p
+        return (CANVAS_W * 0.5 + FOCAL * xc / zc, HZ - FOCAL * yc / zc)
+
+    def project(self, wx, wy, h, clamp=True):
+        """Мир (x, y, высота) -> (sx, sy, zc) или None.
+
+        Точки ближе MIN_Z подтягиваются по лучу (clamp), а точки ЗА камерой не
+        проецируются вовсе: раньше им тоже подставлялся zc = MIN_Z, а xc оставался
+        прежним — точка «перелетала» на другую сторону экрана, четырёхугольник
+        выворачивался и заливал весь кадр (стоя к станции спиной, игрок видел
+        стену вместо космоса).
+        """
+        xc, yc, zc = self.to_cam(wx, wy, h)
         if zc < MIN_Z:
-            if not clamp:
+            if not clamp or zc <= 0.0:
                 return None
-            k = MIN_Z / max(zc, 0.02)
+            k = MIN_Z / zc
             xc *= k
             yc *= k
             zc = MIN_Z
-        sx = CANVAS_W * 0.5 + FOCAL * xc / zc
-        sy = HZ - FOCAL * yc / zc
+        sx, sy = self.to_screen((xc, yc, zc))
         return (sx, max(-3000.0, min(3000.0, sy)), zc)
 
 
@@ -193,20 +205,64 @@ def _ru(value, width=4, prec=1):
     return ("%*.*f" % (width, prec, value)).replace(".", ",")
 
 
+def clip_near(pts, z=MIN_Z):
+    """Отсечение полигона по плоскости z = MIN_Z (Сазерленд-Хогман).
+
+    Без этого четырёхугольник, у которого часть вершин за камерой, выворачивается
+    наизнанку: вершине с zc < 0 подставлялся zc = MIN_Z, а xc оставался прежним, и
+    точка «перелетала» на противоположную сторону экрана — в итоге полигон
+    накрывал весь кадр одной заливкой.
+    """
+    out = []
+    n = len(pts)
+    for i in range(n):
+        a = pts[i]
+        b = pts[(i + 1) % n]
+        a_in = a[2] >= z
+        b_in = b[2] >= z
+        if a_in:
+            out.append(a)
+        if a_in != b_in:
+            d = b[2] - a[2]
+            k = (z - a[2]) / d if abs(d) > 1e-12 else 0.0
+            out.append((a[0] + (b[0] - a[0]) * k,
+                        a[1] + (b[1] - a[1]) * k, z))
+    return out
+
+
+def cam_poly(cam, pts):
+    """Полигон в координатах камеры -> экранный полигон (или None)."""
+    if len(pts) < 3:
+        return None
+    if any(p[2] < MIN_Z for p in pts):
+        if all(p[2] < MIN_Z for p in pts):
+            return None
+        pts = clip_near(pts)
+    if len(pts) < 3:
+        return None
+    return [cam.to_screen(p) for p in pts]
+
+
 def _pt(quad, u, v):
-    (bx0, by0), (bx1, by1), (tx1, ty1), (tx0, ty0) = quad
-    bx = bx0 + (bx1 - bx0) * u
-    by = by0 + (by1 - by0) * u
-    tx = tx0 + (tx1 - tx0) * u
-    ty = ty0 + (ty1 - ty0) * u
-    return (bx + (tx - bx) * v, by + (ty - by) * v)
+    """Точка внутри грани: u — вдоль стены, v — вверх (билинейно в камере)."""
+    (b0, b1, t1, t0) = quad
+    bx = b0[0] + (b1[0] - b0[0]) * u
+    by = b0[1] + (b1[1] - b0[1]) * u
+    bz = b0[2] + (b1[2] - b0[2]) * u
+    tx = t0[0] + (t1[0] - t0[0]) * u
+    ty = t0[1] + (t1[1] - t0[1]) * u
+    tz = t0[2] + (t1[2] - t0[2]) * u
+    return (bx + (tx - bx) * v, by + (ty - by) * v, bz + (tz - bz) * v)
 
 
-def _poly(canvas, quad, u0, v0, u1, v1, color, outline=True):
-    pts = [_pt(quad, u0, v0), _pt(quad, u1, v0), _pt(quad, u1, v1), _pt(quad, u0, v1)]
-    pygame.draw.polygon(canvas, color, pts)
+def _poly(canvas, cam, quad, u0, v0, u1, v1, color, outline=True):
+    poly = cam_poly(cam, [_pt(quad, u0, v0), _pt(quad, u1, v0),
+                          _pt(quad, u1, v1), _pt(quad, u0, v1)])
+    if poly is None:
+        return
+    pygame.draw.polygon(canvas, color, poly)
     if outline:
-        pygame.draw.polygon(canvas, color, pts, 1)
+        pygame.draw.polygon(canvas, color, poly, 1)
 
 
 FACE_COL = {"s": C_HULL, "n": C_HULL_DD, "w": C_PANEL, "e": C_HULL_D}
@@ -218,27 +274,31 @@ def draw_station(canvas, cam, world, t):
     half_h = (world.sy1 - world.sy0) * 0.5
     prep = []
     for x1, y1, x2, y2, side, gx, gy, hl, hh in faces:
-        p0 = cam.project(x1, y1, hl)
-        p1 = cam.project(x2, y2, hl)
-        p2 = cam.project(x2, y2, hh)
-        p3 = cam.project(x1, y1, hh)
-        quad = (p0[:2], p1[:2], p2[:2], p3[:2])
-        xs = [p[0] for p in quad]
-        ys = [p[1] for p in quad]
+        # Грань ведём в координатах камеры: только так её можно честно отсечь по
+        # ближней плоскости (clip_near). Экранные координаты считаются после.
+        quad = (cam.to_cam(x1, y1, hl), cam.to_cam(x2, y2, hl),
+                cam.to_cam(x2, y2, hh), cam.to_cam(x1, y1, hh))
+        poly = cam_poly(cam, list(quad))
+        if poly is None:
+            continue
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
         if max(xs) < -4 or min(xs) > CANVAS_W + 4 or max(ys) < -4 or min(ys) > CANVAS_H + 4:
             continue
         mx, my = (x1 + x2) * 0.5, (y1 + y2) * 0.5
         depth = math.hypot(mx - cam.x, my - cam.y)
-        prep.append((depth, quad, side, gx, gy, min(xs), max(xs), min(ys), max(ys), hl))
+        prep.append((depth, quad, poly, side, gx, gy,
+                     min(xs), max(xs), min(ys), max(ys), hl))
     prep.sort(key=lambda r: -r[0])
 
-    for depth, quad, side, gx, gy, sx0, sx1, sy0, sy1, hl in prep:
+    for depth, quad, poly, side, gx, gy, sx0, sx1, sy0, sy1, hl in prep:
         # подсветка «по цилиндру»: центр корпуса светлее краёв — даёт объём
         k = (gx + 0.5 - world.cx) / half_w if side in ("s", "n") \
             else (gy + 0.5 - world.cy) / half_h
         base = _shade(FACE_COL[side],
                       int(-46.0 * min(1.0, k * k)) + (_hash(gx, gy) % 9) - 4)
-        _poly(canvas, quad, 0.0, 0.0, 1.0, 1.0, base)
+        pygame.draw.polygon(canvas, base, poly)          # уже отсечённый полигон
+        pygame.draw.polygon(canvas, base, poly, 1)
         # Детали рисуем на ЛЮБОМ расстоянии: раньше мелкие грани (в отдалении
         # боковая стена сжимается в полоску) оставались пустой заливкой и
         # станция «теряла» бока, пока не подлетишь. Пропускаем только
@@ -247,39 +307,39 @@ def draw_station(canvas, cam, world, t):
             continue
         if hl > 0.0:
             # ступень надстройки: плита + светлая кромка сверху
-            _poly(canvas, quad, 0.0, 0.78, 1.0, 0.90, C_HULL_L)
-            _poly(canvas, quad, 0.0, 0.90, 1.0, 1.0, _shade(C_HULL_L, -10))
+            _poly(canvas, cam, quad, 0.0, 0.78, 1.0, 0.90, C_HULL_L)
+            _poly(canvas, cam, quad, 0.0, 0.90, 1.0, 1.0, _shade(C_HULL_L, -10))
             continue
         # цоколь + кромка
-        _poly(canvas, quad, 0.0, 0.0, 1.0, 0.055, _shade(C_HULL_DDD, 4))
-        _poly(canvas, quad, 0.0, 0.055, 1.0, 0.075, C_HULL_L)
+        _poly(canvas, cam, quad, 0.0, 0.0, 1.0, 0.055, _shade(C_HULL_DDD, 4))
+        _poly(canvas, cam, quad, 0.0, 0.055, 1.0, 0.075, C_HULL_L)
         # буферная полоса на уровне глаза: чередующиеся блоки (видна в упор)
         for k in range(4):
             u0 = k * 0.25
             col = C_ACCENT if (_hash(gx, gy) + k) % 2 == 0 else (30, 26, 42)
-            _poly(canvas, quad, u0, 0.10, u0 + 0.25, 0.16, col)
+            _poly(canvas, cam, quad, u0, 0.10, u0 + 0.25, 0.16, col)
         # рёбра панелей
-        _poly(canvas, quad, 0.02, 0.075, 0.055, 0.86, _shade(base, 16))
-        _poly(canvas, quad, 0.945, 0.075, 0.98, 0.86, _shade(base, -20))
-        _poly(canvas, quad, 0.47, 0.075, 0.53, 0.86, _shade(base, -12))
+        _poly(canvas, cam, quad, 0.02, 0.075, 0.055, 0.86, _shade(base, 16))
+        _poly(canvas, cam, quad, 0.945, 0.075, 0.98, 0.86, _shade(base, -20))
+        _poly(canvas, cam, quad, 0.47, 0.075, 0.53, 0.86, _shade(base, -12))
         # окна
-        _poly(canvas, quad, 0.10, 0.40, 0.90, 0.64, _shade(base, -30))
+        _poly(canvas, cam, quad, 0.10, 0.40, 0.90, 0.64, _shade(base, -30))
         lit = (_hash(gx + 3, gy * 5 + 1) % 3) == 0
         on = math.sin(t * 1.7 + (_hash(gx, gy) % 7) * 0.9) > -0.35
         wcol = C_WIN if (lit and on) else C_WIN_OFF
-        _poly(canvas, quad, 0.14, 0.43, 0.36, 0.61, wcol)
-        _poly(canvas, quad, 0.64, 0.43, 0.86, 0.61, wcol)
+        _poly(canvas, cam, quad, 0.14, 0.43, 0.36, 0.61, wcol)
+        _poly(canvas, cam, quad, 0.64, 0.43, 0.86, 0.61, wcol)
         # козырёк
-        _poly(canvas, quad, 0.0, 0.86, 1.0, 0.895, C_HULL_L)
-        _poly(canvas, quad, 0.0, 0.895, 1.0, 1.0, _shade(C_HULL_D, -14))
+        _poly(canvas, cam, quad, 0.0, 0.86, 1.0, 0.895, C_HULL_L)
+        _poly(canvas, cam, quad, 0.0, 0.895, 1.0, 1.0, _shade(C_HULL_D, -14))
         # стыковочный док: по центру ближней стены
         if side == "s" and abs(gx - (world.sx0 + world.sx1) // 2) <= 3:
-            _poly(canvas, quad, 0.06, 0.18, 0.94, 0.84, C_BAY)
-            _poly(canvas, quad, 0.14, 0.26, 0.86, 0.76, C_BAY_IN)
+            _poly(canvas, cam, quad, 0.06, 0.18, 0.94, 0.84, C_BAY)
+            _poly(canvas, cam, quad, 0.14, 0.26, 0.86, 0.76, C_BAY_IN)
             glow = C_WIN if (int(t * 2.0) + gx) % 2 == 0 else C_BAY
-            _poly(canvas, quad, 0.30, 0.42, 0.70, 0.62, glow)
+            _poly(canvas, cam, quad, 0.30, 0.42, 0.70, 0.62, glow)
             for uu, vv in ((0.10, 0.22), (0.86, 0.22), (0.10, 0.78), (0.86, 0.78)):
-                _poly(canvas, quad, uu, vv, uu + 0.06, vv + 0.06, C_ACCENT)
+                _poly(canvas, cam, quad, uu, vv, uu + 0.06, vv + 0.06, C_ACCENT)
 
     # мачта с маяком — на верхушке центральной надстройки, у ближней стены
     if cam.y < world.sy0:
@@ -289,7 +349,7 @@ def draw_station(canvas, cam, world, t):
         hbase = world.height(mgx, world.sy0)
         b = cam.project(mx, my, hbase)
         tp = cam.project(mx, my, hbase + 2.6)
-        if b[2] > 0.3:
+        if b is not None and tp is not None and b[2] > 0.3:
             pygame.draw.line(canvas, C_HULL_DD, (b[0], b[1]), (tp[0], tp[1]), 2)
             pygame.draw.line(canvas, C_HULL_L, (tp[0] - 3, tp[1]), (tp[0] + 3, tp[1]), 1)
             on = math.sin(t * 3.0) > 0.0
