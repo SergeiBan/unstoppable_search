@@ -14,8 +14,8 @@
 import math
 from bisect import bisect_right
 
-from config import (PATROL_LEN, PATROL_SPEED_1, PATROL_SPEED_2, STAND_DIST,
-                    STAND_FLAME, STAND_HEAD, STAND_OFFSET)
+from config import (PATROL_LEN, PATROL_SPEED_1, PATROL_SPEED_2, STAND_CELL,
+                    STAND_FLAME, STAND_HALF_W, STAND_HEAD, STAND_PAD)
 
 
 def offset_path(world, margin, arc_steps=32):
@@ -111,10 +111,12 @@ class Standing:
 
     Нужен потому, что у стоящего корабля ракурс меняется ТОЛЬКО от движения
     игрока: на нём сразу видно, переворачивается спрайт или нет, и не надо
-    гадать, что дал собственный полёт корабля.
+    гадать, что дал собственный полёт корабля. В отличие от патрулей, он ещё и
+    перекрывает свою клетку: сквозь стоящий корабль пролететь нельзя.
     """
 
-    def __init__(self, pos, head, color=None, name="стоящий корабль"):
+    def __init__(self, pos, head, color=None, name="стоящий корабль",
+                 half_w=STAND_HALF_W, pad=STAND_PAD):
         self.pos = (float(pos[0]), float(pos[1]))
         self.head = (float(head[0]), float(head[1]))
         self.color = color
@@ -123,15 +125,45 @@ class Standing:
         self.speed = 0.0
         self.margin = 0.0            # фаза мигания габаритных огней
         self.flame = STAND_FLAME
+        self.half_w = half_w         # половина корпуса поперёк курса
+        self.pad = pad               # запас по толщине для препятствия
 
     def update(self, dt):
         return                       # стоит на месте
 
+    def blocked_cells(self):
+        """Клетки, которые корабль занимает.
+
+        Габарит — корпус (полудлина PATROL_LEN, полуширина half_w) плюс запас по
+        толщине. Занятой считаем клетку, у которой ЦЕНТР попал внутрь габарита:
+        это устойчивее «пересечения прямоугольников» — корабль по центру своей
+        клетки занимает ровно одну клетку, а не четыре из-за сдвига на десятые.
+        """
+        hx, hy = self.head
+        n = math.hypot(hx, hy) or 1.0
+        hx, hy = hx / n, hy / n
+        lx, ly = hx * (PATROL_LEN + self.pad), hy * (PATROL_LEN + self.pad)
+        wx, wy = -hy * (self.half_w + self.pad), hx * (self.half_w + self.pad)
+        xs = (self.pos[0] + lx + wx, self.pos[0] + lx - wx,
+              self.pos[0] - lx + wx, self.pos[0] - lx - wx)
+        ys = (self.pos[1] + ly + wy, self.pos[1] + ly - wy,
+              self.pos[1] - ly + wy, self.pos[1] - ly - wy)
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        cells = []
+        for gx in range(int(math.floor(x0)), int(math.ceil(x1))):
+            for gy in range(int(math.floor(y0)), int(math.ceil(y1))):
+                if x0 <= gx + 0.5 <= x1 and y0 <= gy + 0.5 <= y1:
+                    cells.append((gx, gy))
+        return sorted(cells)
+
 
 def make_standing(world, color=None):
-    """Стоящий корабль у южной стены станции, в стороне от курса захода."""
-    pos = (world.cx + STAND_OFFSET, float(world.sy0) - STAND_DIST)
-    return Standing(pos, STAND_HEAD, color=color)
+    """Стоящий корабль в своей клетке у станции; его клетки сразу заняты."""
+    gx, gy = STAND_CELL
+    st = Standing((gx + 0.5, gy + 0.5), STAND_HEAD, color=color,
+                  name="стоящий корабль (%d,%d)" % (gx, gy))
+    world.block_cells(st.blocked_cells())
+    return st
 
 
 def seg_hits_rect(ax, ay, bx, by, rx0, ry0, rx1, ry1):

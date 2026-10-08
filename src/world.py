@@ -13,6 +13,7 @@ class World:
         self.sx1, self.sy1 = sx0 + size, sy0 + size
         self.cx = (self.sx0 + self.sx1) * 0.5
         self.cy = (self.sy0 + self.sy1) * 0.5
+        self.blockers = set()        # клетки, занятые кораблями (не станцией)
 
     def height(self, gx, gy):
         """Высота клетки: базовая или надстройка-«хребет» вдоль оси Y.
@@ -27,8 +28,15 @@ class World:
     def max_height(self):
         return STATION_H_TOWER
 
+    def block_cells(self, cells):
+        """Отметить клетки занятыми кораблями: в них входа нет."""
+        for c in cells:
+            self.blockers.add((int(c[0]), int(c[1])))
+
     def solid(self, gx, gy):
-        """Занята ли клетка станцией."""
+        """Занята ли клетка: корпусом станции или стоящим кораблём."""
+        if (gx, gy) in self.blockers:
+            return True
         return self.sx0 <= gx < self.sx1 and self.sy0 <= gy < self.sy1
 
     def dist_to_station(self, wx, wy):

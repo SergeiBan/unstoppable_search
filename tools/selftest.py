@@ -411,10 +411,13 @@ from patrol import Standing, make_standing
 
 ws = World()
 st = make_standing(ws, (255, 212, 128))
-check("стоящий корабль стоит в 10 кл от кромки станции",
-      abs(ws.dist_to_station(st.pos[0], st.pos[1]) - 10.0) < 1e-9,
+check("стоящий корабль стоит в 9,5 кл от кромки станции (по центру клетки)",
+      abs(ws.dist_to_station(st.pos[0], st.pos[1]) - 9.5) < 1e-9,
       "%.4f кл, клетка (%d,%d)" % (ws.dist_to_station(st.pos[0], st.pos[1]),
                                    int(st.pos[0]), int(st.pos[1])))
+check("стоящий корабль занимает ровно свою клетку",
+      st.blocked_cells() == [(64, 38)] and ws.solid(64, 38),
+      "заняты клетки %s" % (st.blocked_cells(),))
 pos_s = st.pos
 for _ in range(120):
     st.update(1.0 / 60.0)
@@ -424,6 +427,33 @@ check("стоящий корабль не мешает курсу захода",
               for gy in range(30, 48)),
       "он в клетке (%d,%d), коридор захода — x=57" % (int(st.pos[0]),
                                                       int(st.pos[1])))
+
+# в его клетку не влететь: ни в лоб, ни сбоку
+sh_i1 = Ship(64, 37, 0)
+sh_i1.steps = 0
+check("в стоящий корабль не влететь в лоб",
+      not sh_i1.try_move("fwd", ws) and (sh_i1.gx, sh_i1.gy) == (64, 37)
+      and sh_i1.blocks == 1 and sh_i1.warn_t > 0.0,
+      "клетка (%d,%d), отказов %d, предупреждение %.1f с"
+      % (sh_i1.gx, sh_i1.gy, sh_i1.blocks, sh_i1.warn_t))
+sh_i2 = Ship(63, 38, 90)
+sh_i2.steps = 0
+check("в стоящий корабль не влететь сбоку",
+      not sh_i2.try_move("fwd", ws) and (sh_i2.gx, sh_i2.gy) == (63, 38)
+      and sh_i2.blocks == 1,
+      "клетка (%d,%d), отказов %d" % (sh_i2.gx, sh_i2.gy, sh_i2.blocks))
+check("мимо стоящего корабля пройти можно, а в станцию упереться всё ещё можно",
+      ws.solid(64, 37) is False and ws.solid(64, 39) is False
+      and ws.solid(57, 48) is True,
+      "соседние клетки свободны, станция на месте")
+# он стоит в стороне от курса захода: 17 шагов к станции по-прежнему проходят
+w_c2 = World()
+make_standing(w_c2, (255, 212, 128))
+sh_c2 = Ship(57, 30, 0)
+for _ in range(20):
+    sh_c2.try_move("fwd", w_c2)
+check("заход к станции не сломан стоящим кораблём",
+      (sh_c2.gx, sh_c2.gy) == (57, 47), str((sh_c2.gx, sh_c2.gy)))
 
 # он рисуется тем же кодом, что патрули: в кадре должен быть его силуэт
 from config import C_PATROL_D

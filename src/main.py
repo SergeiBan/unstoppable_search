@@ -276,6 +276,11 @@ def run_shots(args):
         ship.snap()
         draw()
         shot(lab)
+    # упор в стоящий корабль: шаг в его клетку отбит, в кадре предупреждение
+    ship.gx, ship.gy, ship.yaw = 64, 37, 0
+    ship.snap()
+    ship.try_move("fwd", world)
+    shot("16_упор_в_стоящий_корабль")
 
     print("каталог снимков: %s" % os.path.abspath(out))
     print("станция: %d x %d = %d клеток, квадрат=%s" % (
