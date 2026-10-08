@@ -1,0 +1,8 @@
+# Окружение создаётся так (глобально пакеты НЕ ставить):
+#   export PATH="$HOME/.hermes/bin:$PATH"
+#   uv python install 3.12
+#   uv venv --python 3.12 .venv
+#   uv pip install --python .venv/bin/python -r requirements.txt
+# Запуск: source .venv/bin/activate   (или сразу .venv/bin/python main.py)
+
+pygame-ce==2.5.8
