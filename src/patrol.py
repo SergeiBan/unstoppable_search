@@ -14,7 +14,8 @@
 import math
 from bisect import bisect_right
 
-from config import PATROL_LEN, PATROL_SPEED_1, PATROL_SPEED_2
+from config import (PATROL_LEN, PATROL_SPEED_1, PATROL_SPEED_2, STAND_DIST,
+                    STAND_FLAME, STAND_HEAD, STAND_OFFSET)
 
 
 def offset_path(world, margin, arc_steps=32):
@@ -103,6 +104,34 @@ def make_patrols(world, colors):
     b = Patrol(world, 20.0, -PATROL_SPEED_2, phase=0.55, color=colors[1],
                name="патруль-2 (20 кл)")
     return [a, b]
+
+
+class Standing:
+    """Корабль, который стоит на месте: тот же силуэт, что у патруля.
+
+    Нужен потому, что у стоящего корабля ракурс меняется ТОЛЬКО от движения
+    игрока: на нём сразу видно, переворачивается спрайт или нет, и не надо
+    гадать, что дал собственный полёт корабля.
+    """
+
+    def __init__(self, pos, head, color=None, name="стоящий корабль"):
+        self.pos = (float(pos[0]), float(pos[1]))
+        self.head = (float(head[0]), float(head[1]))
+        self.color = color
+        self.name = name
+        self.s = 0.0                 # фаза мерцания факела (условная)
+        self.speed = 0.0
+        self.margin = 0.0            # фаза мигания габаритных огней
+        self.flame = STAND_FLAME
+
+    def update(self, dt):
+        return                       # стоит на месте
+
+
+def make_standing(world, color=None):
+    """Стоящий корабль у южной стены станции, в стороне от курса захода."""
+    pos = (world.cx + STAND_OFFSET, float(world.sy0) - STAND_DIST)
+    return Standing(pos, STAND_HEAD, color=color)
 
 
 def seg_hits_rect(ax, ay, bx, by, rx0, ry0, rx1, ry1):

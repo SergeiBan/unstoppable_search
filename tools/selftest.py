@@ -406,6 +406,65 @@ check("полигон, режущий ближнюю плоскость, отс�
 check("грань целиком за камерой не рисуется",
       render.cam_poly(cam_b, [(0.0, 0.0, -1.0), (2.0, 0.0, -2.0), (1.0, 1.0, -3.0)]) is None)
 
+# --- стоящий корабль у станции -------------------------------------------
+from patrol import Standing, make_standing
+
+ws = World()
+st = make_standing(ws, (255, 212, 128))
+check("стоящий корабль стоит в 10 кл от кромки станции",
+      abs(ws.dist_to_station(st.pos[0], st.pos[1]) - 10.0) < 1e-9,
+      "%.4f кл, клетка (%d,%d)" % (ws.dist_to_station(st.pos[0], st.pos[1]),
+                                   int(st.pos[0]), int(st.pos[1])))
+pos_s = st.pos
+for _ in range(120):
+    st.update(1.0 / 60.0)
+check("стоящий корабль именно стоит, а не летает", st.pos == pos_s, str(st.pos))
+check("стоящий корабль не мешает курсу захода",
+      not any(abs(st.pos[0] - 57.5) < 3.0 and abs(st.pos[1] - gy) < 3.0
+              for gy in range(30, 48)),
+      "он в клетке (%d,%d), коридор захода — x=57" % (int(st.pos[0]),
+                                                      int(st.pos[1])))
+
+# он рисуется тем же кодом, что патрули: в кадре должен быть его силуэт
+from config import C_PATROL_D
+canvas_s = pygame.Surface((CANVAS_W, CANVAS_H))
+sh_s = Ship(64, 32, 0)
+sh_s.snap()
+stars_s = render.make_starfield(20261007)
+render.draw_frame(canvas_s, ws, sh_s, stars_s, 2.0, patrols=[st])
+hull_s = [(x, y) for y in range(6, 140) for x in range(4, 316)
+          if tuple(canvas_s.get_at((x, y))[:3]) in ((255, 212, 128), C_PATROL_D)]
+check("стоящий корабль виден в кадре с курса захода", len(hull_s) > 100,
+      "пикселей корпуса %d" % len(hull_s))
+
+# дрейф мимо него: силуэт должен ехать по экрану ровно, без переворотов
+prev_c = None
+worst_step = 0.0
+sizes = []
+for gx_ in range(58, 71):
+    sh_d2 = Ship(gx_, 32, 0)
+    sh_d2.snap()
+    cv_s = pygame.Surface((CANVAS_W, CANVAS_H))
+    render.draw_frame(cv_s, ws, sh_d2, stars_s, 2.0, patrols=[st])
+    pts = [(x, y) for y in range(6, 140) for x in range(4, 316)
+           if tuple(cv_s.get_at((x, y))[:3]) in ((255, 212, 128), C_PATROL_D)]
+    if len(pts) < 60:
+        worst_step = 99.0
+        break
+    cx_ = sum(p[0] for p in pts) / float(len(pts))
+    cy_ = sum(p[1] for p in pts) / float(len(pts))
+    sizes.append((max(p[0] for p in pts) - min(p[0] for p in pts),
+                  max(p[1] for p in pts) - min(p[1] for p in pts)))
+    if prev_c is not None:
+        worst_step = max(worst_step, abs(cx_ - prev_c[0]) - 26.0)
+    prev_c = (cx_, cy_)
+check("силуэт стоящего корабля едет по экрану без переворотов",
+      worst_step < 6.0 and len(sizes) == 13,
+      "лишний скачок центра %.1f px за клетку (сам снос — 23-24 px), "
+      "габарит от %dx%d до %dx%d"
+      % (worst_step, min(s[0] for s in sizes), min(s[1] for s in sizes),
+         max(s[0] for s in sizes), max(s[1] for s in sizes)))
+
 # --- шрифт --------------------------------------------------------------
 hud = ["ДО СТАНЦИИ 17,5 КЛ", "КУРС 045°  ХОД 65",
        "A D < > ПОВОРОТ 45   Q E СНОС", "СТАНЦИЯ 16,6", "СТОЛКНОВЕНИЕ",

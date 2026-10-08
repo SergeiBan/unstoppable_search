@@ -40,7 +40,7 @@ import pixel_font as pf
 import render
 from config import (CANVAS_H, CANVAS_W, C_PATROL_A, C_PATROL_B, FPS,
                     SHIP_START_GX, SHIP_START_GY, SHIP_START_YAW, TURN_STEP)
-from patrol import make_patrols
+from patrol import make_patrols, make_standing
 from ship import Ship
 from world import World
 
@@ -50,7 +50,8 @@ def build_state(seed=20261007):
     ship = Ship(SHIP_START_GX, SHIP_START_GY, SHIP_START_YAW)
     stars = render.make_starfield(seed)
     patrols = make_patrols(world, (C_PATROL_A, C_PATROL_B))
-    return world, ship, stars, patrols
+    standing = make_standing(world, C_PATROL_B)
+    return world, ship, stars, patrols, standing
 
 
 def new_canvas():
@@ -115,7 +116,7 @@ def run_window(args):
         screen = pygame.display.set_mode((CANVAS_W * k, CANVAS_H * k), pygame.RESIZABLE)
     pygame.display.set_caption("unstoppable_search")
     canvas = new_canvas()
-    world, ship, stars, patrols = build_state(args.seed)
+    world, ship, stars, patrols, standing = build_state(args.seed)
     clock = pygame.time.Clock()
     t = 0.0
     show_fps = bool(args.fps)
@@ -151,7 +152,7 @@ def run_window(args):
         t += dt
         render.draw_frame(canvas, world, ship, stars, t,
                           int(clock.get_fps()) if show_fps else None,
-                          patrols=patrols)
+                          patrols=patrols + [standing])
         present(screen, canvas)
         pygame.display.flip()
         if args.save_frame:
@@ -169,7 +170,7 @@ def run_shots(args):
     pygame.init()
     pygame.display.set_mode((CANVAS_W, CANVAS_H))
     canvas = new_canvas()
-    world, ship, stars, patrols = build_state(args.seed)
+    world, ship, stars, patrols, standing = build_state(args.seed)
     out = args.shots
     os.makedirs(out, exist_ok=True)
     dt = 1.0 / FPS
@@ -184,7 +185,8 @@ def run_shots(args):
         ship.update(dt)
         for p in patrols:
             p.update(dt)
-        render.draw_frame(canvas, world, ship, stars, t[0], patrols=patrols)
+        render.draw_frame(canvas, world, ship, stars, t[0],
+                          patrols=patrols + [standing])
 
     def shot(label):
         ship.snap()
@@ -264,6 +266,13 @@ def run_shots(args):
     for gy_s, lab in ((46, "12_спиной_к_станции_вплотную"),
                       (45, "13_спиной_к_станции_1_клетка")):
         ship.gx, ship.gy, ship.yaw = 57, gy_s, 180
+        ship.snap()
+        draw()
+        shot(lab)
+    # стоящий корабль у станции: с курса захода и рядом с ним
+    for gx_s, gy_s, yaw_s, lab in ((64, 32, 0, "14_стоящий_корабль_по_курсу"),
+                                   (61, 33, 0, "15_стоящий_корабль_рядом")):
+        ship.gx, ship.gy, ship.yaw = gx_s, gy_s, yaw_s
         ship.snap()
         draw()
         shot(lab)

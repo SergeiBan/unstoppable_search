@@ -560,10 +560,12 @@ def draw_patrols(canvas, cam, world, patrols, t):
                                 [(cab[0][0], cab[0][1]), cab[1],
                                  (nx - ux * ln * 0.55 - ox * w * 0.45,
                                   ny - uy * ln * 0.55 - oy * w * 0.45)])
-        # факел двигателя: мерцает
+        # факел двигателя: мерцает. У стоящего корабля он почти погашен — иначе
+        # «стоящий» корабль выглядит так, будто вот-вот улетит.
+        fs = getattr(p, "flame", 1.0)
         flick = 0.45 + 0.55 * (0.5 + 0.5 * math.sin(t * 23.0 + p.s * 0.7))
-        fl = ln * (0.28 + 0.42 * flick)
-        fw = w * (0.20 + 0.25 * flick)
+        fl = ln * (0.28 + 0.42 * flick) * fs
+        fw = w * (0.20 + 0.25 * flick) * fs
         pygame.draw.polygon(canvas, C_FLAME, [
             (txx - ox * fw, tyy - oy * fw),
             (txx - ux * fl, tyy - uy * fl),
