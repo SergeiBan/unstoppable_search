@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import math
 import os
+import random
 import sys
 import time
 
@@ -34,12 +35,26 @@ KEY_ACTIONS = {
     _sc("KSCAN_LEFT", 80): "turn_l", _sc("KSCAN_RIGHT", 79): "turn_r",
 }
 
+# Огонь и ввод ответа — тоже по скан-кодам: раскладка на них не влияет.
+FIRE_SCAN = _sc("KSCAN_SPACE", 44)
+BACKSPACE_SCAN = _sc("KSCAN_BACKSPACE", 42)
+MINUS_SCAN = _sc("KSCAN_MINUS", 45)
+DIGIT_SCANS = {
+    _sc("KSCAN_0", 39): "0", _sc("KSCAN_1", 30): "1", _sc("KSCAN_2", 31): "2",
+    _sc("KSCAN_3", 32): "3", _sc("KSCAN_4", 33): "4", _sc("KSCAN_5", 34): "5",
+    _sc("KSCAN_6", 35): "6", _sc("KSCAN_7", 36): "7", _sc("KSCAN_8", 37): "8",
+    _sc("KSCAN_9", 38): "9",
+}
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import duel as D
 import pixel_font as pf
 import render
-from config import (CANVAS_H, CANVAS_W, C_PATROL_A, C_PATROL_B, FPS,
-                    SHIP_START_GX, SHIP_START_GY, SHIP_START_YAW, TURN_STEP)
+from config import (CANVAS_H, CANVAS_W, C_PATROL_A, C_PATROL_B, DUEL_PAUSE,
+                    FIRE_RANGE, FPS, SHIP_START_GX, SHIP_START_GY,
+                    SHIP_START_YAW, TURN_STEP)
+from patrol import hidden as patrol_hidden
 from patrol import make_patrols, make_standing
 from ship import Ship
 from world import World
@@ -51,6 +66,11 @@ def build_state(seed=20261007):
     stars = render.make_starfield(seed)
     patrols = make_patrols(world, (C_PATROL_A, C_PATROL_B))
     standing = make_standing(world, C_PATROL_B)
+    # Патрульные — одна фракция: ударишь одного, встанут все. Пока фракция
+    # нейтральная (сама огня не открывает), вражда начинается с выстрела игрока.
+    faction = D.Faction("патруль")
+    for p in patrols + [standing]:
+        p.faction = faction
     return world, ship, stars, patrols, standing
 
 
@@ -126,6 +146,65 @@ def run_window(args):
         CANVAS_W * k, CANVAS_H * k, k, info.current_w, info.current_h))
     running = True
     inp = Input()
+    ships = patrols + [standing]
+    fight = D.Fight()
+    dead = set()                     # id() уничтоженных: их больше не рисуем
+
+    def pick_target():
+        """По кому стреляем: ближайший корабль в прицеле и в зоне огня."""
+        fx, fy = ship.forward_xy()
+        cam = render.Camera(ship.fx, ship.fy, ship.fyaw)
+        best, best_d = None, FIRE_RANGE
+        for p in ships:
+            if id(p) in dead:
+                continue
+            dx, dy = p.pos[0] - ship.fx, p.pos[1] - ship.fy
+            d = math.hypot(dx, dy)
+            if d < 1e-6 or d > best_d:
+                continue
+            if (dx * fx + dy * fy) / d < 0.86:
+                continue             # цель дальше 30° от прицела
+            if patrol_hidden(cam, world, p.pos):
+                continue             # за станцией — не достать
+            best, best_d = p, d
+        return best
+
+    def fire():
+        tgt = pick_target()
+        if tgt is None:
+            ship.hit_msg = "НЕТ ЦЕЛИ В ПРИЦЕЛЕ"
+            ship.hit_t = 1.2
+            return
+        fight.start(tgt)
+        fac = getattr(tgt, "faction", None)
+        if fac is not None and fac.player_fired():
+            for p in ships:          # первая атака злит всю фракцию
+                if (p is not tgt and id(p) not in dead
+                        and getattr(p, "faction", None) is fac):
+                    fight.start(p, make_active=False)
+        fight.player_fire()
+
+    def apply_events():
+        for kind, target in fight.take_events():
+            if kind == "enemy_down":
+                dead.add(id(target))
+                if hasattr(target, "blocked_cells"):
+                    world.unblock_cells(target.blocked_cells())
+                ship.hit_msg = "ВРАГ УНИЧТОЖЕН"
+                ship.hit_t = 1.4
+            elif kind == "player_down":
+                ship.gx, ship.gy, ship.yaw = (SHIP_START_GX, SHIP_START_GY,
+                                              SHIP_START_YAW)
+                ship.snap()
+                ship.hit_msg = "ВАС СБИЛИ — ВОЗВРАТ НА СТАНЦИЮ"
+                ship.hit_t = 2.2
+            elif kind == "repelled":
+                ship.hit_msg = "ВЫСТРЕЛ ОТБИТ СИЛОВЫМ ПОЛЕМ"
+                ship.hit_t = 1.0
+            elif kind == "shot_repelled":
+                ship.hit_msg = "ОТБИТО!"
+                ship.hit_t = 0.9
+
     while running:
         dt = min(clock.tick(FPS) / 1000.0, 0.05)
         frame += 1
@@ -142,6 +221,14 @@ def run_window(args):
                 shot_n += 1
                 os.makedirs("shots/user", exist_ok=True)
                 pygame.image.save(canvas, "shots/user/shot%02d.png" % shot_n)
+            elif e.type == pygame.KEYDOWN and e.scancode in DIGIT_SCANS:
+                fight.type_digit(DIGIT_SCANS[e.scancode])
+            elif e.type == pygame.KEYDOWN and e.scancode == BACKSPACE_SCAN:
+                fight.backspace()
+            elif e.type == pygame.KEYDOWN and e.scancode == MINUS_SCAN:
+                fight.type_digit("-")
+            elif e.type == pygame.KEYDOWN and e.scancode == FIRE_SCAN:
+                fire()
             elif inp.handle(e):
                 # первый шаг/поворот — сразу, без паузы повтора
                 ship.move_cool = 0.0
@@ -149,10 +236,16 @@ def run_window(args):
         ship.update(dt, inp.acts(), world)
         for p in patrols:
             p.update(dt)
+        for d in list(fight.duels):
+            if d.too_far((ship.fx, ship.fy)):
+                fight.drop(d.target)          # враг ушёл из зоны боя
+        fight.update(dt)
+        apply_events()
         t += dt
         render.draw_frame(canvas, world, ship, stars, t,
                           int(clock.get_fps()) if show_fps else None,
-                          patrols=patrols + [standing])
+                          patrols=[p for p in ships if id(p) not in dead],
+                          fight=fight)
         present(screen, canvas)
         pygame.display.flip()
         if args.save_frame:
@@ -179,6 +272,7 @@ def run_shots(args):
     rows = []
     hashes = []
     n = [0]
+    fight = None                    # бой: понадобится для кадров поединка
 
     def draw():
         t[0] += dt
@@ -186,7 +280,7 @@ def run_shots(args):
         for p in patrols:
             p.update(dt)
         render.draw_frame(canvas, world, ship, stars, t[0],
-                          patrols=patrols + [standing])
+                          patrols=patrols + [standing], fight=fight)
 
     def shot(label):
         ship.snap()
@@ -281,6 +375,20 @@ def run_shots(args):
     ship.snap()
     ship.try_move("fwd", world)
     shot("16_упор_в_стоящий_корабль")
+    # поединок: игрок стреляет по стоящему кораблю, тот отбивает выстрел
+    # силовым полем и задаёт задачу (генератор с фиксированным зерном)
+    fight = D.Fight(rng=random.Random(3))
+    ship.gx, ship.gy, ship.yaw = 64, 34, 0
+    ship.snap()
+    fight.start(standing)
+    fight.player_fire()                 # 0.238 < 0.5 — NPC отбил выстрел
+    fight.update(DUEL_PAUSE + 0.01)     # враг навёлся и задал задачу
+    draw()
+    shot("17_бой_задача")
+    for ch in str(fight.current.problem.answer):   # верный ответ — отбито
+        fight.type_digit(ch)
+    draw()
+    shot("18_бой_отбит_полем")
 
     print("каталог снимков: %s" % os.path.abspath(out))
     print("станция: %d x %d = %d клеток, квадрат=%s" % (

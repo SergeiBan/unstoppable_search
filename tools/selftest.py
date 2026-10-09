@@ -20,9 +20,10 @@ pygame.display.set_mode((10, 10))
 
 import pixel_font as pf
 import render
-from config import (CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN, FOCAL, FPS, PATROL_R,
-                    SHIP_START_GX, SHIP_START_GY, SHIP_START_YAW, STEP_REPEAT,
-                    TURN_REPEAT, TURN_STEP)
+from config import (CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN, DEATH_PAUSE,
+                    DUEL_PATIENCE, DUEL_PAUSE, DUEL_RANGE, DUEL_TIME, FOCAL, FPS,
+                    PATROL_R, SHIP_START_GX, SHIP_START_GY, SHIP_START_YAW,
+                    STEP_REPEAT, TURN_REPEAT, TURN_STEP)
 from ship import Ship
 from world import World
 
@@ -537,6 +538,164 @@ check("тарелка стоящего корабля едет по экрану
       "габарит от %dx%d до %dx%d"
       % (worst_step, min(s[0] for s in sizes), min(s[1] for s in sizes),
          max(s[0] for s in sizes), max(s[1] for s in sizes)))
+
+# --- поединки ------------------------------------------------------------
+import random
+
+import duel as D
+
+rng_t = random.Random(1)
+tasks = [D.Problem.make(1, rng_t) for _ in range(50)]
+check("задача первого уровня — сложение двух чисел, ответ сходится",
+      all(p.answer == p.a + p.b and 2 <= p.a <= 9 and 2 <= p.b <= 9
+          for p in tasks),
+      "пример: %s = %d" % (tasks[0].text(), tasks[0].answer))
+
+f_neutral = D.Faction("патруль")
+check("нейтральная фракция сама не воюет", f_neutral.at_war() is False)
+check("выстрел по члену фракции злит всю фракцию",
+      f_neutral.player_fired() is True and f_neutral.at_war() is True
+      and f_neutral.player_fired() is False,
+      "вражда включается ровно один раз")
+check("враждебная фракция воюет без повода",
+      D.Faction("пираты", hostile=True).at_war() is True)
+
+
+class Doll:
+    """Подставная цель: поединку от неё нужна только позиция."""
+
+    def __init__(self):
+        self.pos = (60.0, 30.0)
+
+
+# выстрел игрока: NPC защищается примерно в половине случаев
+N_TRIES = 400
+downs = 0
+for i in range(N_TRIES):
+    d0 = D.Duel(Doll(), rng=random.Random(i))
+    if d0.player_fire() == "enemy_down":
+        downs += 1
+check("NPC отбивает выстрел игрока примерно в половине случаев",
+      0.42 < downs / float(N_TRIES) < 0.58,
+      "уничтожен %d раз из %d, то есть защита %.0f%%"
+      % (downs, N_TRIES, 100.0 * (1.0 - downs / float(N_TRIES))))
+
+# отбитый выстрел передаёт ход врагу, враг наводится и задаёт задачу
+d = D.Duel(Doll(), rng=random.Random(1))          # 0.134 < 0.5 — NPC отбил
+check("отбитый выстрел передаёт ход врагу",
+      d.player_fire() == "repelled" and d.state == "enemy_windup"
+      and ("repelled", d.target) in d.take_events(),
+      "состояние %s" % d.state)
+d.update(DUEL_PAUSE + 0.01)
+check("враг стреляет сам, и над ним встаёт задача",
+      d.state == "enemy_asking" and d.problem is not None
+      and abs(d.timer - DUEL_TIME) < 1e-9
+      and ("enemy_shot", d.target) in d.take_events(),
+      "задача %s, таймер %.2f с" % (d.problem.text(), d.timer))
+
+# верный ответ: выстрел отбит, ход возвращается игроку
+solved_all = True
+for ch in str(d.problem.answer):
+    solved_all = d.type_digit(ch)
+check("верный ответ отбивает выстрел и возвращает ход игроку",
+      solved_all and d.state == "player_turn" and d.solved == 1
+      and ("shot_repelled", d.target) in d.take_events(),
+      "состояние %s, решено %d" % (d.state, d.solved))
+
+# просроченный ответ: игрок гибнет
+d = D.Duel(Doll(), rng=random.Random(1))
+d.player_fire()
+d.update(DUEL_PAUSE + 0.01)
+d.type_digit("0")                     # 0 не может быть ответом: слагаемые от 2
+d.update(DUEL_TIME + 0.01)
+check("не успел ответить — игрок гибнет и ход уходит врагу",
+      ("player_down", d.target) in d.take_events()
+      and d.state == "enemy_windup" and d.missed == 1,
+      "состояние %s, провалов %d" % (d.state, d.missed))
+
+# неверный ответ не засчитывается, но его можно стереть и исправить
+d = D.Duel(Doll(), rng=random.Random(1))
+d.player_fire()
+d.update(DUEL_PAUSE + 0.01)
+wrong = str(d.problem.answer + 1)
+for ch in wrong:
+    d.type_digit(ch)
+check("неверный ответ выстрел не отбивает", d.state == "enemy_asking",
+      "состояние %s" % d.state)
+d.backspace()
+check("забой стирает последний символ ответа", d.answer == wrong[:-1],
+      "ответ «%s»" % d.answer)
+
+# если игрок тянет, враг стреляет сам
+d = D.Duel(Doll(), rng=random.Random(1))
+d.update(DUEL_PATIENCE + 0.01)
+check("если игрок тянет, враг начинает сам",
+      d.state == "enemy_windup", "состояние %s" % d.state)
+d.update(DUEL_PAUSE + 0.01)
+check("после наведения враг действительно стреляет",
+      d.state == "enemy_asking" and d.problem is not None,
+      "состояние %s" % d.state)
+
+# уничтожение врага заканчивает поединок
+d = D.Duel(Doll(), rng=random.Random(0))          # 0.844 > 0.5 — NPC не отбил
+check("если NPC не отбил, он уничтожен и поединок окончен",
+      d.player_fire() == "enemy_down" and d.state == "done"
+      and ("enemy_down", d.target) in d.take_events(),
+      "состояние %s" % d.state)
+
+# разрыв дистанции прерывает бой
+d = D.Duel(Doll(), rng=random.Random(1))
+check("бой распадается, если враг ушёл из зоны боя",
+      d.too_far((60.0, 30.0 + DUEL_RANGE - 1.0)) is False
+      and d.too_far((60.0, 30.0 + DUEL_RANGE + 1.0)) is True)
+
+# бой с несколькими врагами: ход переходит по кругу, все стреляют по очереди
+a1, a2, a3 = Doll(), Doll(), Doll()
+f = D.Fight(rng=random.Random(1))
+f.start(a1)
+check("выстрел по одному завязывает поединок именно с ним",
+      len(f.duels) == 1 and f.current.target is a1)
+f.start(a2, make_active=False)
+f.start(a3, make_active=False)
+check("подмога встаёт в очередь, но ход остаётся у первого",
+      len(f.duels) == 3 and f.current.target is a1,
+      "врагов в бою %d, ход у %s" % (len(f.duels), "первого" if f.current.target is a1 else "другого"))
+f.player_fire()                       # rng(1): 0.134 < 0.5 — отбито
+f.update(DUEL_PAUSE + 0.01)           # враг дал задачу
+for ch in str(f.current.problem.answer):
+    f.type_digit(ch)
+f.update(0.01)                        # события боя разбираются здесь
+check("после отбитого выстрела ход переходит следующему врагу",
+      f.current.target is a2 and f.duels[1].state == "player_turn",
+      "теперь стреляет %s" % ("второй" if f.current.target is a2 else "другой"))
+f.player_fire()
+f.update(DUEL_PAUSE + 0.01)
+for ch in str(f.current.problem.answer):
+    f.type_digit(ch)
+f.update(0.01)
+check("круг идёт дальше: третий враг тоже получает ход",
+      f.current.target is a3, "в бою врагов %d" % len(f.duels))
+
+# уничтоженный враг выпадает из боя, а гибель игрока даёт передышку
+f2 = D.Fight(rng=random.Random(0))     # 0.844 > 0.5 — враг не отбил
+f2.start(a1)
+f2.start(a2, make_active=False)
+f2.player_fire()
+f2.update(0.01)
+check("уничтоженный враг выпадает из очереди",
+      len(f2.duels) == 1 and f2.current.target is a2,
+      "врагов осталось %d" % len(f2.duels))
+f2.start(a3, make_active=False)
+f2.current.state = "enemy_windup"      # враг наводится...
+f2.current.timer = 0.01
+f2.update(0.02)                        # ...и стреляет
+f2.update(DUEL_TIME + 0.01)            # игрок не успел ответить
+f2.update(0.01)
+check("гибель игрока даёт врагам передышку и снимает задачу",
+      all(d.state == "player_turn" and d.problem is None
+          and d.timer > DEATH_PAUSE * 0.8 for d in f2.duels),
+      "врагов %d, минимальный таймер %.1f с"
+      % (len(f2.duels), min(d.timer for d in f2.duels)))
 
 # --- шрифт --------------------------------------------------------------
 hud = ["ДО СТАНЦИИ 17,5 КЛ", "КУРС 045°  ХОД 65",

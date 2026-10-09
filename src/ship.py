@@ -36,6 +36,8 @@ class Ship:
         self.turns = 0               # сколько поворотов сделано
         self.step_time = STEP_REPEAT  # сколько «стоил» последний шаг
         self.lit = 0.0               # счётчик времени для мигалок
+        self.hit_t = 0.0             # сколько ещё показывать «меня сбили»
+        self.hit_msg = ""            # что написать на экране после гибели
 
     # --- логика ---------------------------------------------------------
     def world(self):
@@ -92,6 +94,8 @@ class Ship:
     def update(self, dt, acts=None, world=None):
         if self.warn_t > 0.0:
             self.warn_t = max(0.0, self.warn_t - dt)
+        if self.hit_t > 0.0:
+            self.hit_t = max(0.0, self.hit_t - dt)
         self.lit += dt
 
         if acts is not None and world is not None:

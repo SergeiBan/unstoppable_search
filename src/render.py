@@ -508,6 +508,17 @@ def draw_hud(canvas, ship, world, t, fps=None):
                  C_WARN, msg, C_WARN)
     if fps is not None:
         pf.draw(canvas, "%d К/С" % fps, CANVAS_W - 34, 9, C_HUD_DIM, shadow=(0, 0, 0))
+    if ship.hit_t > 0.0:
+        # рамка по краю экрана: красная — сбили, голубая — отбито
+        edge = C_WARN if "СБИЛИ" in ship.hit_msg else C_SHIELD
+        pygame.draw.rect(canvas, edge, (0, 0, CANVAS_W, 2))
+        pygame.draw.rect(canvas, edge, (0, CANVAS_H - 2, CANVAS_W, 2))
+        pygame.draw.rect(canvas, edge, (0, 0, 2, CANVAS_H))
+        pygame.draw.rect(canvas, edge, (CANVAS_W - 2, 0, 2, CANVAS_H))
+        if ship.hit_msg:
+            tw = pf.text_width(ship.hit_msg)
+            pf.plate(canvas, (CANVAS_W // 2 - tw // 2 - 4, 58, tw + 8, 12),
+                     (40, 12, 22), edge, ship.hit_msg, C_WARN2)
 
 
 def draw_patrols(canvas, cam, world, patrols, t):
@@ -570,12 +581,89 @@ def draw_patrols(canvas, cam, world, patrols, t):
                                      (int(lx) - 1, int(ly) - 1, 2, 2))
 
 
-def draw_frame(canvas, world, ship, stars, t, fps=None, patrols=None):
+def _brackets(canvas, cx, cy, r, col):
+    """Уголки-метка вокруг корабля: видно, кто враг."""
+    k = 4
+    for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        x0 = int(cx + sx * r) - (k if sx > 0 else 0)
+        y0 = int(cy + sy * r) - (k if sy > 0 else 0)
+        pygame.draw.line(canvas, col, (x0, y0), (x0 + k, y0), 1)
+        pygame.draw.line(canvas, col, (x0, y0), (x0, y0 + k), 1)
+
+
+def _flash_fx(canvas, cx, cy, r, kind, left):
+    """Эффект: отбитый выстрел — силовое поле, попадание — вспышка со взрывом."""
+    k = 1.0 - left / 0.8
+    if kind == "repelled":
+        rr = r + 2.0 + 6.0 * k
+        pygame.draw.ellipse(canvas, C_SHIELD,
+                            (int(cx - rr), int(cy - rr * 0.66),
+                             int(2 * rr), int(2 * rr * 0.66)), 1)
+        if rr > r + 4.0:
+            pygame.draw.ellipse(canvas, C_SHIELD2,
+                                (int(cx - rr * 1.25), int(cy - rr * 0.82),
+                                 int(2 * rr * 1.25), int(2 * rr * 0.82)), 1)
+    else:
+        rr = r + 1.0 + 9.0 * k
+        for i in range(6):
+            a = i * 1.0472 + k * 1.4
+            x = cx + math.cos(a) * rr
+            y = cy + math.sin(a) * rr * 0.72
+            pygame.draw.rect(canvas, C_FLAME if i % 2 else C_WARN,
+                             (int(x) - 1, int(y) - 1, 2, 2))
+        if k < 0.5:
+            pygame.draw.ellipse(canvas, C_WARN,
+                                (int(cx - rr * 0.6), int(cy - rr * 0.4),
+                                 int(rr * 1.2), int(rr * 0.8)), 1)
+
+
+def draw_duel(canvas, cam, fight, ship, t):
+    """Бой: метки врагов, задача над стреляющим, ответ игрока и таймер."""
+    if fight is None or not fight.hot():
+        return
+    for i, d in enumerate(fight.duels):
+        p = cam.project(d.target.pos[0], d.target.pos[1], PATROL_H, clamp=False)
+        if p is None:
+            continue
+        px, py, zc = p[0], p[1], p[2]
+        r = max(3.0, FOCAL * PATROL_R / max(zc, 0.05))
+        _brackets(canvas, px, py, r + 2.0, C_WARN)
+        if d.flash_t > 0.0:
+            _flash_fx(canvas, px, py, r, d.flash, d.flash_t)
+        if i != fight.active:
+            continue
+        if d.state == "enemy_asking" and d.problem is not None:
+            txt = d.problem.text() + "=?"
+            tw = pf.text_width(txt)
+            pf.plate(canvas, (int(px) - tw // 2 - 3, int(py - r) - 18, tw + 6, 11),
+                     (44, 12, 20), C_WARN, txt, C_WARN2)
+        elif d.state == "enemy_windup" and int(t * 10) % 2 == 0:
+            txt = "ЦЕЛИТ"
+            tw = pf.text_width(txt)
+            pf.plate(canvas, (int(px) - tw // 2 - 3, int(py - r) - 16, tw + 6, 10),
+                     (40, 28, 8), C_FLAME, txt, C_FLAME)
+    d = fight.current
+    if d is not None and d.state == "enemy_asking" and d.problem is not None:
+        # ответ игрока и полоска таймера — внизу по центру
+        shown = d.answer if d.answer else "_"
+        txt = "ОТВЕТ %s" % shown
+        tw = pf.text_width(txt)
+        bx = CANVAS_W // 2 - tw // 2 - 4
+        pf.plate(canvas, (bx, 116, tw + 8, 12), (12, 24, 44), C_SHIELD, txt, C_HUD_TXT)
+        frac = max(0.0, min(1.0, d.timer / DUEL_TIME))
+        w = int((tw + 8) * frac)
+        bar = C_HUD_TXT if frac > 0.4 else C_WARN
+        pygame.draw.rect(canvas, bar, (bx, 129, w, 2))
+
+
+def draw_frame(canvas, world, ship, stars, t, fps=None, patrols=None, fight=None):
     cam = Camera(ship.fx, ship.fy, ship.fyaw)
     draw_space(canvas, cam, stars, t)
     draw_station(canvas, cam, world, t)
     if patrols:
         draw_patrols(canvas, cam, world, patrols, t)
+    if fight is not None:
+        draw_duel(canvas, cam, fight, ship, t)
     draw_reticle(canvas)
     draw_capture_frame(canvas, cam, world, ship)
     draw_cockpit(canvas, t)

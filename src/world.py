@@ -33,6 +33,11 @@ class World:
         for c in cells:
             self.blockers.add((int(c[0]), int(c[1])))
 
+    def unblock_cells(self, cells):
+        """Освободить клетки — например, когда стоящий корабль уничтожен."""
+        for c in cells:
+            self.blockers.discard((int(c[0]), int(c[1])))
+
     def solid(self, gx, gy):
         """Занята ли клетка: корпусом станции или стоящим кораблём."""
         if (gx, gy) in self.blockers:
