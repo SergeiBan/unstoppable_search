@@ -20,10 +20,11 @@ pygame.display.set_mode((10, 10))
 
 import pixel_font as pf
 import render
-from config import (ATTACK_STANDOFF, CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN,
-                    DEATH_PAUSE, DUEL_PATIENCE, DUEL_PAUSE, DUEL_RANGE, DUEL_TIME,
-                    FOCAL, FPS, PATROL_R, SHIP_START_GX, SHIP_START_GY,
-                    SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT, TURN_STEP)
+from config import (ATTACK_STANDOFF, CANVAS_H, CANVAS_W, C_PATROL_D, C_WARN,
+                    C_WIN, DEATH_PAUSE, DUEL_PATIENCE, DUEL_PAUSE, DUEL_RANGE,
+                    DUEL_TIME, FOCAL, FPS, PATROL_H, PATROL_R, SHIP_START_GX,
+                    SHIP_START_GY, SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT,
+                    TURN_STEP)
 from ship import Ship
 from world import World
 
@@ -828,6 +829,24 @@ check("враги сами подходят к игроку и сами откр
       shots_by_enemy > 0 and f4.hot(),
       "врагов в бою %d, выстрелов врага за минуту %d"
       % (len(f4.duels), shots_by_enemy))
+
+# метка врага — один уголок слева сверху, а не четыре по углам
+cv_d = pygame.Surface((CANVAS_W, CANVAS_H))
+sh_d = Ship(64, 34, 0)
+sh_d.snap()
+fight_d = D.Fight(rng=random.Random(1))
+fight_d.start(st)
+render.draw_frame(cv_d, ws, sh_d, stars_s, 2.0, patrols=[st], fight=fight_d)
+cam_d = render.Camera(sh_d.fx, sh_d.fy, sh_d.fyaw)
+pp = cam_d.project(st.pos[0], st.pos[1], PATROL_H, clamp=False)
+rr = FOCAL * PATROL_R / pp[2]
+marks = [(x, y) for y in range(int(pp[1] - rr - 4), int(pp[1] + rr + 9))
+         for x in range(int(pp[0] - rr - 14), int(pp[0] + rr + 9))
+         if tuple(cv_d.get_at((x, y))[:3]) == C_WARN]
+left_top = all(m[0] < pp[0] and m[1] < pp[1] for m in marks)
+check("метка врага — один уголок слева сверху, а не четыре",
+      len(marks) >= 6 and len(marks) <= 14 and left_top,
+      "пикселей метки %d, все слева сверху: %s" % (len(marks), left_top))
 
 # --- шрифт --------------------------------------------------------------
 hud = ["ДО СТАНЦИИ 17,5 КЛ", "КУРС 045°  ХОД 65",

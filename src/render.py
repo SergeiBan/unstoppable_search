@@ -581,14 +581,17 @@ def draw_patrols(canvas, cam, world, patrols, t):
                                      (int(lx) - 1, int(ly) - 1, 2, 2))
 
 
-def _brackets(canvas, cx, cy, r, col):
-    """Уголки-метка вокруг корабля: видно, кто враг."""
-    k = 4
-    for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
-        x0 = int(cx + sx * r) - (k if sx > 0 else 0)
-        y0 = int(cy + sy * r) - (k if sy > 0 else 0)
-        pygame.draw.line(canvas, col, (x0, y0), (x0 + k, y0), 1)
-        pygame.draw.line(canvas, col, (x0, y0), (x0, y0 + k), 1)
+def _bracket(canvas, cx, cy, r, col):
+    """Метка врага: один уголок у левого верхнего края диска.
+
+    Раньше уголков было четыре (по углам габарита) — игрок просил оставить один.
+    Ставим его ниже плашки с задачей, чтобы они не сливались.
+    """
+    k = 5
+    x0 = int(cx - r) - k
+    y0 = int(cy - r * 0.62) - k          # верхняя кромка диска, а не габарита
+    pygame.draw.line(canvas, col, (x0, y0), (x0 + k, y0), 1)
+    pygame.draw.line(canvas, col, (x0, y0), (x0, y0 + k), 1)
 
 
 def _flash_fx(canvas, cx, cy, r, kind, left):
@@ -627,7 +630,7 @@ def draw_duel(canvas, cam, fight, ship, t):
             continue
         px, py, zc = p[0], p[1], p[2]
         r = max(3.0, FOCAL * PATROL_R / max(zc, 0.05))
-        _brackets(canvas, px, py, r + 2.0, C_WARN)
+        _bracket(canvas, px, py, r + 2.0, C_WARN)
         if d.flash_t > 0.0:
             _flash_fx(canvas, px, py, r, d.flash, d.flash_t)
         if i != fight.active:
