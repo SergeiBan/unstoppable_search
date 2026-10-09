@@ -510,25 +510,6 @@ def draw_hud(canvas, ship, world, t, fps=None):
         pf.draw(canvas, "%d К/С" % fps, CANVAS_W - 34, 9, C_HUD_DIM, shadow=(0, 0, 0))
 
 
-GLOW_CACHE = {}
-
-
-def _glow(col, r):
-    """Полупрозрачный ореол вокруг тарелки (кэш по цвету и радиусу)."""
-    key = (col, r)
-    g = GLOW_CACHE.get(key)
-    if g is None:
-        k = int(r * 2.2) + 3
-        g = pygame.Surface((k * 2, k * 2), pygame.SRCALPHA)
-        for h, a in ((1.00, 20), (0.72, 26), (0.46, 34)):
-            pygame.draw.ellipse(
-                g, (col[0], col[1], col[2], a),
-                pygame.Rect(int(k - k * h), int(k - k * h * 0.66),
-                            int(2 * k * h), int(2 * k * h * 0.66)))
-        GLOW_CACHE[key] = g
-    return g
-
-
 def draw_patrols(canvas, cam, world, patrols, t):
     """Корабли: круглые «летающие тарелки».
 
@@ -538,9 +519,8 @@ def draw_patrols(canvas, cam, world, patrols, t):
     Спрайт рисуется по проекции центра корабля, размер берётся по глубине —
     поэтому он не сжимается в точку уже с трёх клеток, как вытянутый корпус.
 
-    Факела двигателя нет вовсе. У ЛЕТЯЩЕГО корабля вокруг всей тарелки идёт
-    полупрозрачный ореол — он и показывает, что корабль идёт, и заодно прячет
-    любые огрехи позиционирования; у СТОЯЩЕГО огня нет совсем.
+    Огня у корабля нет вовсе — ни факела, ни ореола: что тарелка летит и куда,
+    видно по её движению. Стоящий и летящий корабль выглядят одинаково.
     """
     for p in patrols:
         if patrol_hidden(cam, world, p.pos):
@@ -557,10 +537,6 @@ def draw_patrols(canvas, cam, world, patrols, t):
             pygame.draw.rect(canvas, col,
                              (int(round(cx)) - 1, int(round(cy)) - 1, 2, 2))
             continue
-        if abs(getattr(p, "speed", 0.0)) > 0.0:     # у стоящего ореола нет
-            g = _glow(col, max(3, int(r)))
-            canvas.blit(g, (int(cx) - g.get_width() // 2,
-                            int(cy) - g.get_height() // 2))
         rx, ry = r, r * 0.62
         # корпус-диск: заливка, светлая верхняя кромка, тёмная обводка
         pygame.draw.ellipse(canvas, col, (int(cx - rx), int(cy - ry),

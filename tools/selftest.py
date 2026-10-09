@@ -20,9 +20,9 @@ pygame.display.set_mode((10, 10))
 
 import pixel_font as pf
 import render
-from config import (CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN, FPS, SHIP_START_GX,
-                    SHIP_START_GY, SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT,
-                    TURN_STEP)
+from config import (CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN, FOCAL, FPS, PATROL_R,
+                    SHIP_START_GX, SHIP_START_GY, SHIP_START_YAW, STEP_REPEAT,
+                    TURN_REPEAT, TURN_STEP)
 from ship import Ship
 from world import World
 
@@ -365,7 +365,8 @@ check("патруль за станцией не рисуется",
       len(ship_pixels(canvas, free_sky)) < 8,
       "пикселей %d" % len(ship_pixels(canvas, free_sky)))
 
-# у летящего корабля вокруг тарелки идёт полупрозрачный ореол, у стоящего — нет
+# огня у корабля нет вовсе: спрайт не выходит за габарит самой тарелки
+# (ни ореола вокруг, ни факела сзади), и летящий со стоящим выглядят одинаково
 sh_h = Ship(64, 32, 0)
 sh_h.snap()
 render.draw_frame(cv_empty, w, sh_h, stars, 2.0)
@@ -373,14 +374,18 @@ free_sky = cv_empty.copy()
 fake.pos = (64.5, 38.5)
 fake.head = (1.0, 0.0)
 render.draw_frame(canvas, w, sh_h, stars, 2.0, patrols=[fake])
-fly_px = len(ship_pixels(canvas, free_sky))
+fly = ship_pixels(canvas, free_sky)
 still = P.Standing((64.5, 38.5), (1.0, 0.0), color=(150, 245, 255))
 render.draw_frame(canvas, w, sh_h, stars, 2.0, patrols=[still])
-stand_px = len(ship_pixels(canvas, free_sky))
-check("у летящего корабля есть ореол, у стоящего огня нет",
-      fly_px > stand_px * 1.2,
-      "пикселей со стоящим %d, с летящим %d (ореол даёт разницу)"
-      % (stand_px, fly_px))
+stand = ship_pixels(canvas, free_sky)
+r_px = FOCAL * PATROL_R / 6.5          # радиус тарелки на экране в 6,5 клетках
+w_px = max(p[0] for p in fly) - min(p[0] for p in fly) + 1
+h_px = max(p[1] for p in fly) - min(p[1] for p in fly) + 1
+check("у корабля нет ни ореола, ни факела: спрайт не выходит за тарелку",
+      w_px <= 2.4 * r_px + 6 and h_px <= 2.4 * r_px + 6
+      and abs(len(fly) - len(stand)) < 0.25 * len(stand),
+      "габарит %dx%d px при радиусе тарелки %.1f px; пикселей в полёте %d, "
+      "на стоянке %d" % (w_px, h_px, r_px, len(fly), len(stand)))
 
 # --- регрессия: спиной к станции кадр не должен заливаться серым ---------
 # Причина бага: точке ЗА камерой подставлялся zc = MIN_Z, а xc оставался прежним —
