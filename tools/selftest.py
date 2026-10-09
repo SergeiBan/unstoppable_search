@@ -20,10 +20,10 @@ pygame.display.set_mode((10, 10))
 
 import pixel_font as pf
 import render
-from config import (CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN, DEATH_PAUSE,
-                    DUEL_PATIENCE, DUEL_PAUSE, DUEL_RANGE, DUEL_TIME, FOCAL, FPS,
-                    PATROL_R, SHIP_START_GX, SHIP_START_GY, SHIP_START_YAW,
-                    STEP_REPEAT, TURN_REPEAT, TURN_STEP)
+from config import (ATTACK_STANDOFF, CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN,
+                    DEATH_PAUSE, DUEL_PATIENCE, DUEL_PAUSE, DUEL_RANGE, DUEL_TIME,
+                    FOCAL, FPS, PATROL_R, SHIP_START_GX, SHIP_START_GY,
+                    SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT, TURN_STEP)
 from ship import Ship
 from world import World
 
@@ -733,6 +733,101 @@ check("гибель игрока даёт врагам передышку и с�
           and d.timer > DEATH_PAUSE * 0.8 for d in f2.duels),
       "врагов %d, минимальный таймер %.1f с"
       % (len(f2.duels), min(d.timer for d in f2.duels)))
+
+# --- патруль в бою: бросает маршрут и идёт на игрока ----------------------
+wf = World()
+pat = P.make_patrols(wf, ((150, 245, 255), (255, 212, 128)))[0]
+player = (57.5, 30.5)
+pat.update(1.0, player, False)
+check("нейтральный патруль продолжает обход станции",
+      pat.mode == "orbit" and abs(wf.dist_to_station(*pat.pos) - 15.0) < 0.01,
+      "режим %s, до кромки станции %.4f кл" % (pat.mode, wf.dist_to_station(*pat.pos)))
+
+d_before = math.hypot(pat.pos[0] - player[0], pat.pos[1] - player[1])
+inside = None
+for _ in range(2400):                      # 40 секунд боя
+    pat.update(1.0 / 60.0, player, True)
+    if (wf.sx0 - 0.5 < pat.pos[0] < wf.sx1 + 0.5
+            and wf.sy0 - 0.5 < pat.pos[1] < wf.sy1 + 0.5):
+        inside = pat.pos
+d_after = math.hypot(pat.pos[0] - player[0], pat.pos[1] - player[1])
+check("став врагом, патруль бросает маршрут и идёт на игрока",
+      pat.mode == "attack" and d_after < d_before
+      and d_after <= ATTACK_STANDOFF + 1.0,
+      "было %.1f кл, стало %.1f кл (держится %.1f)"
+      % (d_before, d_after, ATTACK_STANDOFF))
+check("по дороге к игроку патруль не влетает в станцию",
+      inside is None, "оказался бы внутри: %s" % (inside,))
+
+# противник на другой стороне станции: идёт вокруг по своему кольцу, не сквозь
+pat2 = P.make_patrols(wf, ((150, 245, 255), (255, 212, 128)))[1]
+pat2.s = 0.0
+pat2.update(0.0)
+dx, dy = wf.cx - pat2.pos[0], wf.cy - pat2.pos[1]
+n = math.hypot(dx, dy) or 1.0
+behind = (wf.cx + dx / n * 30.0, wf.cy + dy / n * 30.0)   # прямо за станцией
+inside2 = None
+for _ in range(3600):                      # 60 секунд
+    pat2.update(1.0 / 60.0, behind, True)
+    if (wf.sx0 - 0.5 < pat2.pos[0] < wf.sx1 + 0.5
+            and wf.sy0 - 0.5 < pat2.pos[1] < wf.sy1 + 0.5):
+        inside2 = pat2.pos
+d2 = math.hypot(pat2.pos[0] - behind[0], pat2.pos[1] - behind[1])
+check("до цели за станцией патруль доходит в обход, а не сквозь корпус",
+      inside2 is None and d2 <= ATTACK_STANDOFF + 2.0,
+      "итоговое расстояние %.1f кл, внутри станции не был" % d2)
+
+# игрок убежал — патруль возвращается к обходу станции
+far = (57.5, 30.5 - 120.0)
+for _ in range(1800):
+    pat.update(1.0 / 60.0, far, True)
+check("если игрок убежал дальше AGGRO_GIVEUP, патруль возвращается на маршрут",
+      pat.mode == "orbit" and abs(wf.dist_to_station(*pat.pos) - 15.0) < 0.05,
+      "режим %s, до кромки станции %.4f кл" % (pat.mode, wf.dist_to_station(*pat.pos)))
+
+# вступление в бой: враждебный корабль в радиусе сам получает свой поединок
+class FakeShip:
+    def __init__(self, pos, war):
+        self.pos = pos
+        self.faction = D.Faction("патруль")
+        self.faction.angry = war
+
+
+war_ship = FakeShip((60.0, 33.0), True)
+calm_ship = FakeShip((60.0, 33.0), False)
+far_ship = FakeShip((60.0, 62.0), True)
+f3 = D.Fight(rng=random.Random(1))
+joined = M.engage(f3, [war_ship, calm_ship, far_ship], (57.5, 30.5), set())
+check("враждебный корабль в радиусе боя вступает в бой сам",
+      joined == [war_ship] and len(f3.duels) == 1 and f3.current.target is war_ship,
+      "вступили %d, в бою %d" % (len(joined), len(f3.duels)))
+check("нейтральный и далёкий в бой не вступают",
+      all(d.target is not calm_ship and d.target is not far_ship for d in f3.duels))
+check("повторный вызов не заводит второй поединок на того же врага",
+      M.engage(f3, [war_ship], (57.5, 30.5), set()) == [] and len(f3.duels) == 1)
+
+# сквозной прогон боя: враги сами подходят и сами открывают огонь
+ws2 = World()
+pls = P.make_patrols(ws2, ((150, 245, 255), (255, 212, 128)))
+war2 = D.Faction("патруль")
+war2.angry = True
+for p in pls:
+    p.faction = war2
+f4 = D.Fight(rng=random.Random(5))
+player2 = (57.5, 30.5)
+shots_by_enemy = 0
+for _ in range(60 * 60):                   # минута боя
+    for p in pls:
+        p.update(1.0 / 60.0, player2, True)
+    M.engage(f4, pls, player2, set())
+    f4.update(1.0 / 60.0)
+    for kind, _tgt in f4.take_events():
+        if kind == "enemy_shot":
+            shots_by_enemy += 1
+check("враги сами подходят к игроку и сами открывают огонь",
+      shots_by_enemy > 0 and f4.hot(),
+      "врагов в бою %d, выстрелов врага за минуту %d"
+      % (len(f4.duels), shots_by_enemy))
 
 # --- шрифт --------------------------------------------------------------
 hud = ["ДО СТАНЦИИ 17,5 КЛ", "КУРС 045°  ХОД 65",

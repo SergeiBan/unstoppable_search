@@ -14,8 +14,9 @@
 import math
 from bisect import bisect_right
 
-from config import (PATROL_R, PATROL_SPEED_1, PATROL_SPEED_2, STAND_CELL,
-                    STAND_HEAD, STAND_PAD)
+from config import (AGGRO_GIVEUP, AGGRO_RANGE, ATTACK_BACKOFF, ATTACK_STANDOFF,
+                    CHASE_CLEAR, PATROL_R, PATROL_SPEED_1, PATROL_SPEED_2,
+                    RING_STEP, STAND_CELL, STAND_HEAD, STAND_PAD)
 
 
 def offset_path(world, margin, arc_steps=32):
@@ -72,29 +73,120 @@ class OrbitPath:
         ln = math.hypot(dx, dy) or 1.0
         return (x0 + dx * k, y0 + dy * k), (dx / ln, dy / ln)
 
+    def nearest_s(self, x, y):
+        """Параметр ближайшей точки маршрута к (x, y).
+
+        Нужен, когда корабль уходил в атаку по прямой и возвращается к обходу
+        станции: без пересчёта он бы «телепортировался» на старую точку пути.
+        """
+        best_s, best_d = 0.0, None
+        for i, (px, py) in enumerate(self.pts):
+            nx, ny = self.pts[(i + 1) % len(self.pts)]
+            vx, vy = nx - px, ny - py
+            vlen2 = vx * vx + vy * vy
+            if vlen2 < 1e-12:
+                continue
+            k = ((x - px) * vx + (y - py) * vy) / vlen2
+            k = max(0.0, min(1.0, k))
+            qx, qy = px + vx * k, py + vy * k
+            d = math.hypot(x - qx, y - qy)
+            if best_d is None or d < best_d:
+                best_d, best_s = d, self.cum[i] + math.sqrt(vlen2) * k
+        return best_s
+
 
 class Patrol:
-    """Патрульный корабль: скользит по маршруту с постоянной скоростью."""
+    """Патрульный корабль: скользит по маршруту; став врагом — идёт на игрока.
+
+    Пока фракция нейтральна, корабль просто облетает станцию по маршруту. Как
+    только фракция стала враждебной, он бросает маршрут и идёт на игрока, держа
+    дистанцию боя: подлетает до ATTACK_STANDOFF и там остаётся, а если игрок
+    пролетел вплотную — отходит, чтобы не таранить. Станция на прямой мешает,
+    поэтому обход строится через её ближний угол; когда игрок убегает дальше
+    AGGRO_GIVEUP, корабль возвращается к обходу станции.
+    """
 
     def __init__(self, world, margin, speed, phase=0.0, color=None, name="патруль"):
         self.path = OrbitPath(world, margin)
+        self.world = world
         self.speed = float(speed)          # клеток в секунду, знак — направление
         self.s = (phase % 1.0) * self.path.total
         self.color = color
         self.name = name
         self.pos = (0.0, 0.0)
         self.head = (0.0, 1.0)
+        self.mode = "orbit"                # orbit | attack
         self.update(0.0)
 
     @property
     def margin(self):
         return self.path.margin
 
-    def update(self, dt):
+    def update(self, dt, target=None, at_war=False):
+        """Полёт за кадр. target — позиция игрока, at_war — враждебна ли фракция."""
+        if target is not None:
+            dist = math.hypot(target[0] - self.pos[0], target[1] - self.pos[1])
+            if at_war:
+                if self.mode == "orbit" and dist <= AGGRO_RANGE:
+                    self.mode = "attack"
+                elif self.mode == "attack" and dist > AGGRO_GIVEUP:
+                    self.mode = "orbit"
+                    self.s = self.path.nearest_s(*self.pos)
+                    self.speed = abs(self.speed)
+            elif self.mode == "attack":
+                self.mode = "orbit"        # война кончилась — снова патрулируем
+                self.s = self.path.nearest_s(*self.pos)
+                self.speed = abs(self.speed)
+            if self.mode == "attack":
+                self._chase(target, dt)
+                return
         self.s = (self.s + self.speed * dt) % self.path.total
         self.pos, head = self.path.at(self.s)
         sign = 1.0 if self.speed >= 0 else -1.0
         self.head = (head[0] * sign, head[1] * sign)
+
+    # --- атака --------------------------------------------------------
+    def _chase(self, target, dt):
+        """Идём на игрока, обходя станцию; держим дистанцию боя."""
+        tx, ty = target
+        dx, dy = tx - self.pos[0], ty - self.pos[1]
+        dist = math.hypot(dx, dy) or 1e-9
+        step = abs(self.speed) * dt
+        if dist > ATTACK_STANDOFF:
+            wx, wy = self._waypoint(tx, ty)
+            vx, vy = wx - self.pos[0], wy - self.pos[1]
+            vlen = math.hypot(vx, vy) or 1e-9
+            k = min(1.0, step / vlen)
+            self.pos = (self.pos[0] + vx * k, self.pos[1] + vy * k)
+            self.head = (vx / vlen, vy / vlen)
+        elif dist < ATTACK_STANDOFF - ATTACK_BACKOFF:
+            k = min(1.0, step / dist)
+            self.pos = (self.pos[0] - dx * k, self.pos[1] - dy * k)
+            self.head = (-dx / dist, -dy / dist)
+        else:
+            self.head = (dx / dist, dy / dist)   # держим дистанцию, смотрим на цель
+
+    def _waypoint(self, tx, ty):
+        """Куда идти: прямо на игрока или по кольцу вокруг станции.
+
+        Если станция стоит на прямой, идём не «сквозь неё», а по своему же
+        кольцу обхода — в ту сторону, где ближе к игроку. Кольцо вынесено от
+        станции на 15 или 20 клеток, поэтому корабль обходит её честно и никогда
+        не режет через корпус. Проверяем не сам корпус, а корпус с запасом
+        CHASE_CLEAR: иначе корабль проходит вплотную и задевает стену боком.
+        """
+        if not seg_hits_rect(self.pos[0], self.pos[1], tx, ty,
+                             self.world.sx0 - CHASE_CLEAR,
+                             self.world.sy0 - CHASE_CLEAR,
+                             self.world.sx1 + CHASE_CLEAR,
+                             self.world.sy1 + CHASE_CLEAR):
+            return tx, ty
+        s_now = self.path.nearest_s(self.pos[0], self.pos[1])
+        s_goal = self.path.nearest_s(tx, ty)
+        fwd = (s_goal - s_now) % self.path.total
+        step = RING_STEP if fwd <= self.path.total - fwd else -RING_STEP
+        pt, _ = self.path.at(s_now + step)
+        return pt
 
 
 def make_patrols(world, colors):

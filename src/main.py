@@ -85,6 +85,30 @@ def build_state(seed=20261007):
     return world, ship, stars, patrols, standing
 
 
+def engage(fight, ships, target, dead):
+    """Враждебные корабли, подошедшие на дистанцию боя, вступают в бой сами.
+
+    Так враг «стремится напасть»: как только фракция стала враждебной и корабль
+    подошёл на FIRE_RANGE, у него появляется свой поединок — и он стреляет в
+    свою очередь, даже если игрок в него не целился. Возвращает тех, кто вступил
+    в этот кадр: это можно проверить тестом без окна.
+    """
+    joined = []
+    for p in ships:
+        if id(p) in dead:
+            continue
+        fac = getattr(p, "faction", None)
+        if fac is None or not fac.at_war():
+            continue
+        if math.hypot(p.pos[0] - target[0], p.pos[1] - target[1]) > FIRE_RANGE:
+            continue
+        if any(d.target is p for d in fight.duels):
+            continue
+        fight.start(p, make_active=not fight.duels)
+        joined.append(p)
+    return joined
+
+
 def new_canvas():
     return pygame.Surface((CANVAS_W, CANVAS_H))
 
@@ -245,8 +269,11 @@ def run_window(args):
                 ship.move_cool = 0.0
                 ship.turn_cool = 0.0
         ship.update(dt, inp.acts(), world)
+        at_war = any(getattr(p, "faction", None) is not None
+                     and p.faction.at_war() for p in ships)
         for p in patrols:
-            p.update(dt)
+            p.update(dt, (ship.fx, ship.fy), at_war)
+        engage(fight, ships, (ship.fx, ship.fy), dead)
         for d in list(fight.duels):
             if d.too_far((ship.fx, ship.fy)):
                 fight.drop(d.target)          # враг ушёл из зоны боя
@@ -288,8 +315,10 @@ def run_shots(args):
     def draw():
         t[0] += dt
         ship.update(dt)
+        at_war = any(getattr(p, "faction", None) and p.faction.at_war()
+                     for p in patrols)
         for p in patrols:
-            p.update(dt)
+            p.update(dt, (ship.fx, ship.fy), at_war)
         render.draw_frame(canvas, world, ship, stars, t[0],
                           patrols=patrols + [standing], fight=fight)
 
@@ -400,6 +429,19 @@ def run_shots(args):
         fight.type_digit(ch)
     draw()
     shot("18_бой_отбит_полем")
+    # патрули стали врагами и идут на игрока, а не кружат вокруг станции
+    war = D.Faction("патруль")
+    war.angry = True
+    for p in patrols:
+        p.faction = war
+    standing.faction = war
+    ship.gx, ship.gy, ship.yaw = 57, 30, 0
+    ship.snap()
+    for _ in range(420):                    # 7 секунд погони
+        for p in patrols:
+            p.update(1.0 / FPS, (ship.fx, ship.fy), True)
+    draw()
+    shot("19_патрули_идут_на_игрока")
 
     print("каталог снимков: %s" % os.path.abspath(out))
     print("станция: %d x %d = %d клеток, квадрат=%s" % (
