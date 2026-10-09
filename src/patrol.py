@@ -14,8 +14,8 @@
 import math
 from bisect import bisect_right
 
-from config import (PATROL_LEN, PATROL_SPEED_1, PATROL_SPEED_2, STAND_CELL,
-                    STAND_FLAME, STAND_HALF_W, STAND_HEAD, STAND_PAD)
+from config import (PATROL_R, PATROL_SPEED_1, PATROL_SPEED_2, STAND_CELL,
+                    STAND_HEAD, STAND_PAD)
 
 
 def offset_path(world, margin, arc_steps=32):
@@ -107,48 +107,39 @@ def make_patrols(world, colors):
 
 
 class Standing:
-    """Корабль, который стоит на месте: тот же силуэт, что у патруля.
+    """Корабль, который стоит на месте: та же круглая тарелка, что у патруля.
 
-    Нужен потому, что у стоящего корабля ракурс меняется ТОЛЬКО от движения
-    игрока: на нём сразу видно, переворачивается спрайт или нет, и не надо
-    гадать, что дал собственный полёт корабля. В отличие от патрулей, он ещё и
-    перекрывает свою клетку: сквозь стоящий корабль пролететь нельзя.
+    У стоящего корабля ракурс меняется ТОЛЬКО от движения игрока, поэтому на нём
+    удобно проверять спрайт. В отличие от патрулей он ещё и перекрывает свою
+    клетку: сквозь стоящий корабль пролететь нельзя. Огня у него нет вовсе —
+    ни факела, ни ореола: ореол в игре означает «корабль летит».
     """
 
     def __init__(self, pos, head, color=None, name="стоящий корабль",
-                 half_w=STAND_HALF_W, pad=STAND_PAD):
+                 pad=STAND_PAD):
         self.pos = (float(pos[0]), float(pos[1]))
         self.head = (float(head[0]), float(head[1]))
         self.color = color
         self.name = name
-        self.s = 0.0                 # фаза мерцания факела (условная)
-        self.speed = 0.0
-        self.margin = 0.0            # фаза мигания габаритных огней
-        self.flame = STAND_FLAME
-        self.half_w = half_w         # половина корпуса поперёк курса
+        self.s = 0.0                 # фаза мигания огней по ободу
+        self.speed = 0.0             # ноль — значит, ореола не будет
+        self.margin = 0.0
         self.pad = pad               # запас по толщине для препятствия
 
     def update(self, dt):
         return                       # стоит на месте
 
     def blocked_cells(self):
-        """Клетки, которые корабль занимает.
+        """Клетки, которые занимает тарелка.
 
-        Габарит — корпус (полудлина PATROL_LEN, полуширина half_w) плюс запас по
-        толщине. Занятой считаем клетку, у которой ЦЕНТР попал внутрь габарита:
-        это устойчивее «пересечения прямоугольников» — корабль по центру своей
-        клетки занимает ровно одну клетку, а не четыре из-за сдвига на десятые.
+        Корабль круглый, поэтому габарит — квадрат со стороной 2*(радиус + запас),
+        без всякой возни с курсом. Занятой считаем клетку, у которой ЦЕНТР попал
+        внутрь габарита: так корабль по центру клетки занимает ровно одну клетку,
+        а не четыре от сдвига на десятые доли.
         """
-        hx, hy = self.head
-        n = math.hypot(hx, hy) or 1.0
-        hx, hy = hx / n, hy / n
-        lx, ly = hx * (PATROL_LEN + self.pad), hy * (PATROL_LEN + self.pad)
-        wx, wy = -hy * (self.half_w + self.pad), hx * (self.half_w + self.pad)
-        xs = (self.pos[0] + lx + wx, self.pos[0] + lx - wx,
-              self.pos[0] - lx + wx, self.pos[0] - lx - wx)
-        ys = (self.pos[1] + ly + wy, self.pos[1] + ly - wy,
-              self.pos[1] - ly + wy, self.pos[1] - ly - wy)
-        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        r = PATROL_R + self.pad
+        x0, x1 = self.pos[0] - r, self.pos[0] + r
+        y0, y1 = self.pos[1] - r, self.pos[1] + r
         cells = []
         for gx in range(int(math.floor(x0)), int(math.ceil(x1))):
             for gy in range(int(math.floor(y0)), int(math.ceil(y1))):
@@ -197,4 +188,4 @@ def hidden(cam, world, pos):
 
 
 def half_len():
-    return PATROL_LEN
+    return PATROL_R

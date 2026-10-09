@@ -510,74 +510,88 @@ def draw_hud(canvas, ship, world, t, fps=None):
         pf.draw(canvas, "%d К/С" % fps, CANVAS_W - 34, 9, C_HUD_DIM, shadow=(0, 0, 0))
 
 
+GLOW_CACHE = {}
+
+
+def _glow(col, r):
+    """Полупрозрачный ореол вокруг тарелки (кэш по цвету и радиусу)."""
+    key = (col, r)
+    g = GLOW_CACHE.get(key)
+    if g is None:
+        k = int(r * 2.2) + 3
+        g = pygame.Surface((k * 2, k * 2), pygame.SRCALPHA)
+        for h, a in ((1.00, 20), (0.72, 26), (0.46, 34)):
+            pygame.draw.ellipse(
+                g, (col[0], col[1], col[2], a),
+                pygame.Rect(int(k - k * h), int(k - k * h * 0.66),
+                            int(2 * k * h), int(2 * k * h * 0.66)))
+        GLOW_CACHE[key] = g
+    return g
+
+
 def draw_patrols(canvas, cam, world, patrols, t):
-    """Патрульные корабли: рисуются после станции, закрытые ею — не рисуются."""
+    """Корабли: круглые «летающие тарелки».
+
+    Круглая форма снимает разом пачку глюков сложного силуэта. У тарелки нет ни
+    носа, ни хвоста, поэтому ракурс и его вырождение (когда корабль смотрит точно
+    в камеру) вообще не меняют вид: с любого направления это один и тот же круг.
+    Спрайт рисуется по проекции центра корабля, размер берётся по глубине —
+    поэтому он не сжимается в точку уже с трёх клеток, как вытянутый корпус.
+
+    Факела двигателя нет вовсе. У ЛЕТЯЩЕГО корабля вокруг всей тарелки идёт
+    полупрозрачный ореол — он и показывает, что корабль идёт, и заодно прячет
+    любые огрехи позиционирования; у СТОЯЩЕГО огня нет совсем.
+    """
     for p in patrols:
         if patrol_hidden(cam, world, p.pos):
             continue
-        px, py = p.pos
-        hx, hy = p.head
-        hl = PATROL_LEN
-        nose = cam.project(px + hx * hl, py + hy * hl, PATROL_H, clamp=False)
-        tail = cam.project(px - hx * hl, py - hy * hl, PATROL_H, clamp=False)
-        if nose is None or tail is None:
+        c = cam.project(p.pos[0], p.pos[1], PATROL_H, clamp=False)
+        if c is None:
             continue
-        nx, ny = nose[0], nose[1]
-        txx, tyy = tail[0], tail[1]
-        if not (-40 <= nx <= CANVAS_W + 40 and -40 <= ny <= CANVAS_H + 40):
+        cx, cy, zc = c[0], c[1], c[2]
+        if not (-40 <= cx <= CANVAS_W + 40 and -40 <= cy <= CANVAS_H + 40):
             continue
         col = p.color or C_PATROL_A
-        vx, vy = nx - txx, ny - tyy
-        ln = math.hypot(vx, vy)
-        if ln < 6.5:
-            # Вдали силуэт всё равно не разбирается, а тёмная обводка съедает
-            # спрайт целиком — рисуем яркую пару «корпус + факел», чтобы
-            # патруль читался точкой, а не тёмной кляксой.
+        r = FOCAL * PATROL_R / max(zc, 0.05)        # радиус тарелки на экране
+        if r < 1.7:
             pygame.draw.rect(canvas, col,
-                             (int(round(nx)) - 1, int(round(ny)) - 1, 2, 2))
-            pygame.draw.rect(canvas, C_FLAME,
-                             (int(round(txx)) - 1, int(round(tyy)) - 1, 2, 2))
+                             (int(round(cx)) - 1, int(round(cy)) - 1, 2, 2))
             continue
-        ux, uy = vx / ln, vy / ln
-        ox, oy = -uy, ux                       # перпендикуляр к курсу
-        w = ln * 0.40
-        hull = [(nx, ny),
-                (nx - ux * ln * 0.30 + ox * w, ny - uy * ln * 0.30 + oy * w),
-                (nx - ux * ln * 0.78 + ox * w * 0.50, ny - uy * ln * 0.78 + oy * w * 0.50),
-                (nx - ux * ln, ny - uy * ln),
-                (nx - ux * ln * 0.78 - ox * w * 0.50, ny - uy * ln * 0.78 - oy * w * 0.50),
-                (nx - ux * ln * 0.30 - ox * w, ny - uy * ln * 0.30 - oy * w)]
-        pygame.draw.polygon(canvas, col, hull)
-        if ln >= 8.0:
-            pygame.draw.polygon(canvas, C_PATROL_D, hull, 1)
-        # кабина и сопло
-        if ln >= 8.0:
-            cab = [(nx - ux * ln * 0.30, ny - uy * ln * 0.30),
-                   (nx - ux * ln * 0.30 + ox * w * 0.45, ny - uy * ln * 0.30 + oy * w * 0.45),
-                   (nx - ux * ln * 0.55, ny - uy * ln * 0.55)]
-            pygame.draw.polygon(canvas, C_WIN, cab)
-            pygame.draw.polygon(canvas, C_WIN,
-                                [(cab[0][0], cab[0][1]), cab[1],
-                                 (nx - ux * ln * 0.55 - ox * w * 0.45,
-                                  ny - uy * ln * 0.55 - oy * w * 0.45)])
-        # факел двигателя: мерцает. У стоящего корабля он почти погашен — иначе
-        # «стоящий» корабль выглядит так, будто вот-вот улетит.
-        fs = getattr(p, "flame", 1.0)
-        flick = 0.45 + 0.55 * (0.5 + 0.5 * math.sin(t * 23.0 + p.s * 0.7))
-        fl = ln * (0.28 + 0.42 * flick) * fs
-        fw = w * (0.20 + 0.25 * flick) * fs
-        pygame.draw.polygon(canvas, C_FLAME, [
-            (txx - ox * fw, tyy - oy * fw),
-            (txx - ux * fl, tyy - uy * fl),
-            (txx + ox * fw, tyy + oy * fw)])
-        # габаритные огни: красный/зелёный по крыльям
-        if ln >= 7.0:
-            blink = int(t * 3.0 + p.margin) % 2 == 0
-            for sgn, c in ((1.0, C_LIGHT_R), (-1.0, C_LIGHT_G)):
-                if blink or sgn > 0:
-                    lx = nx - ux * ln * 0.30 + ox * w * sgn
-                    ly = ny - uy * ln * 0.30 + oy * w * sgn
-                    pygame.draw.rect(canvas, c, (int(lx) - 1, int(ly) - 1, 2, 2))
+        if abs(getattr(p, "speed", 0.0)) > 0.0:     # у стоящего ореола нет
+            g = _glow(col, max(3, int(r)))
+            canvas.blit(g, (int(cx) - g.get_width() // 2,
+                            int(cy) - g.get_height() // 2))
+        rx, ry = r, r * 0.62
+        # корпус-диск: заливка, светлая верхняя кромка, тёмная обводка
+        pygame.draw.ellipse(canvas, col, (int(cx - rx), int(cy - ry),
+                                          int(2 * rx), int(2 * ry)))
+        if r >= 3.0:
+            pygame.draw.ellipse(canvas, _shade(col, 46),
+                                (int(cx - rx * 0.82), int(cy - ry * 0.78),
+                                 int(2 * rx * 0.82), int(2 * ry * 0.58)))
+            pygame.draw.ellipse(canvas, C_PATROL_D,
+                                (int(cx - rx), int(cy - ry),
+                                 int(2 * rx), int(2 * ry)), 1)
+        # купол
+        dr = r * 0.46
+        pygame.draw.ellipse(canvas, _shade(col, -84),
+                            (int(cx - dr), int(cy - ry - dr * 0.9),
+                             int(2 * dr), int(2 * dr)))
+        if r >= 5.0:
+            pygame.draw.ellipse(canvas, C_WIN,
+                                (int(cx - dr * 0.5), int(cy - ry - dr * 0.55),
+                                 int(dr), int(dr * 0.62)))
+        # огни по нижнему ободу: мигают, но у стоящего первой горит всегда
+        if r >= 4.0:
+            blink = int(t * 3.0 + getattr(p, "margin", 0.0)) % 2 == 0
+            for k in range(5):
+                a = math.pi * (0.12 + 0.76 * k / 4.0)
+                lx = cx - math.cos(a) * rx * 0.86
+                ly = cy + math.sin(a) * ry * 0.80
+                if blink or k == 0:
+                    c2 = C_LIGHT_R if k % 2 == 0 else C_LIGHT_G
+                    pygame.draw.rect(canvas, c2,
+                                     (int(lx) - 1, int(ly) - 1, 2, 2))
 
 
 def draw_frame(canvas, world, ship, stars, t, fps=None, patrols=None):

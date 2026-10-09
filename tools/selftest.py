@@ -20,8 +20,9 @@ pygame.display.set_mode((10, 10))
 
 import pixel_font as pf
 import render
-from config import (CANVAS_H, CANVAS_W, FPS, SHIP_START_GX, SHIP_START_GY,
-                    SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT, TURN_STEP)
+from config import (CANVAS_H, CANVAS_W, C_PATROL_D, C_WIN, FPS, SHIP_START_GX,
+                    SHIP_START_GY, SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT,
+                    TURN_STEP)
 from ship import Ship
 from world import World
 
@@ -334,14 +335,52 @@ def count_col(surf, col):
             if surf.get_at((x, y))[:3] == col[:3]:
                 n += 1
     return n
-near = count_col(canvas, (150, 245, 255))
-check("патруль в кадре виден (есть его цвет)", near > 12, "пикселей %d" % near)
+
+
+def ship_pixels(with_ship, without_ship):
+    """Пиксели корабля: всё, чем кадр с кораблём отличается от кадра без него.
+
+    Так надёжнее, чем угадывать палитру: у станции есть свои цвета, и любой
+    список «цветов корабля» нет-нет да и совпадёт с каким-нибудь её пикселем.
+    """
+    pts = []
+    for y in range(6, 140):
+        for x in range(4, 316):
+            if with_ship.get_at((x, y))[:3] != without_ship.get_at((x, y))[:3]:
+                pts.append((x, y))
+    return pts
+
+
+cv_empty = pygame.Surface((CANVAS_W, CANVAS_H))
+render.draw_frame(cv_empty, w, sh, stars, 1.0)
+free_sky = cv_empty.copy()
+fake.pos = (58.0, 30.0)
+render.draw_frame(canvas, w, sh, stars, 1.0, patrols=[fake])
+near = len(ship_pixels(canvas, free_sky))
+check("патруль в кадре виден", near > 30, "пикселей %d" % near)
 fake.pos = (58.0, 75.0)                  # за станцией
 fake.s = 1.0
 render.draw_frame(canvas, w, sh, stars, 1.0, patrols=[fake])
 check("патруль за станцией не рисуется",
-      count_col(canvas, (150, 245, 255)) < 12,
-      "пикселей %d" % count_col(canvas, (150, 245, 255)))
+      len(ship_pixels(canvas, free_sky)) < 8,
+      "пикселей %d" % len(ship_pixels(canvas, free_sky)))
+
+# у летящего корабля вокруг тарелки идёт полупрозрачный ореол, у стоящего — нет
+sh_h = Ship(64, 32, 0)
+sh_h.snap()
+render.draw_frame(cv_empty, w, sh_h, stars, 2.0)
+free_sky = cv_empty.copy()
+fake.pos = (64.5, 38.5)
+fake.head = (1.0, 0.0)
+render.draw_frame(canvas, w, sh_h, stars, 2.0, patrols=[fake])
+fly_px = len(ship_pixels(canvas, free_sky))
+still = P.Standing((64.5, 38.5), (1.0, 0.0), color=(150, 245, 255))
+render.draw_frame(canvas, w, sh_h, stars, 2.0, patrols=[still])
+stand_px = len(ship_pixels(canvas, free_sky))
+check("у летящего корабля есть ореол, у стоящего огня нет",
+      fly_px > stand_px * 1.2,
+      "пикселей со стоящим %d, с летящим %d (ореол даёт разницу)"
+      % (stand_px, fly_px))
 
 # --- регрессия: спиной к станции кадр не должен заливаться серым ---------
 # Причина бага: точке ЗА камерой подставлялся zc = MIN_Z, а xc оставался прежним —
@@ -455,30 +494,29 @@ for _ in range(20):
 check("заход к станции не сломан стоящим кораблём",
       (sh_c2.gx, sh_c2.gy) == (57, 47), str((sh_c2.gx, sh_c2.gy)))
 
-# он рисуется тем же кодом, что патрули: в кадре должен быть его силуэт
-from config import C_PATROL_D
-canvas_s = pygame.Surface((CANVAS_W, CANVAS_H))
+# он рисуется тем же кодом, что патрули: в кадре должна быть его тарелка
+cv_s = pygame.Surface((CANVAS_W, CANVAS_H))
+cv_f = pygame.Surface((CANVAS_W, CANVAS_H))
 sh_s = Ship(64, 32, 0)
 sh_s.snap()
 stars_s = render.make_starfield(20261007)
-render.draw_frame(canvas_s, ws, sh_s, stars_s, 2.0, patrols=[st])
-hull_s = [(x, y) for y in range(6, 140) for x in range(4, 316)
-          if tuple(canvas_s.get_at((x, y))[:3]) in ((255, 212, 128), C_PATROL_D)]
-check("стоящий корабль виден в кадре с курса захода", len(hull_s) > 100,
-      "пикселей корпуса %d" % len(hull_s))
+render.draw_frame(cv_f, ws, sh_s, stars_s, 2.0)
+render.draw_frame(cv_s, ws, sh_s, stars_s, 2.0, patrols=[st])
+hull_s = len(ship_pixels(cv_s, cv_f))
+check("стоящий корабль виден в кадре с курса захода", hull_s > 80,
+      "пикселей корабля %d" % hull_s)
 
-# дрейф мимо него: силуэт должен ехать по экрану ровно, без переворотов
+# дрейф мимо него: тарелка должна ехать по экрану ровно, без скачков центра
 prev_c = None
 worst_step = 0.0
 sizes = []
 for gx_ in range(58, 71):
     sh_d2 = Ship(gx_, 32, 0)
     sh_d2.snap()
-    cv_s = pygame.Surface((CANVAS_W, CANVAS_H))
+    render.draw_frame(cv_f, ws, sh_d2, stars_s, 2.0)
     render.draw_frame(cv_s, ws, sh_d2, stars_s, 2.0, patrols=[st])
-    pts = [(x, y) for y in range(6, 140) for x in range(4, 316)
-           if tuple(cv_s.get_at((x, y))[:3]) in ((255, 212, 128), C_PATROL_D)]
-    if len(pts) < 60:
+    pts = ship_pixels(cv_s, cv_f)
+    if len(pts) < 40:
         worst_step = 99.0
         break
     cx_ = sum(p[0] for p in pts) / float(len(pts))
@@ -488,7 +526,7 @@ for gx_ in range(58, 71):
     if prev_c is not None:
         worst_step = max(worst_step, abs(cx_ - prev_c[0]) - 26.0)
     prev_c = (cx_, cy_)
-check("силуэт стоящего корабля едет по экрану без переворотов",
+check("тарелка стоящего корабля едет по экрану без скачков",
       worst_step < 6.0 and len(sizes) == 13,
       "лишний скачок центра %.1f px за клетку (сам снос — 23-24 px), "
       "габарит от %dx%d до %dx%d"
