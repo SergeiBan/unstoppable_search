@@ -36,14 +36,25 @@ KEY_ACTIONS = {
 }
 
 # Огонь и ввод ответа — тоже по скан-кодам: раскладка на них не влияет.
+# Цифры берём И с верхнего ряда, И с цифровой клавиатуры справа от Enter: у неё
+# собственные скан-коды (KSCAN_KP_*), и без них набранный на ней ответ просто не
+# доходил до игры.
 FIRE_SCAN = _sc("KSCAN_SPACE", 44)
 BACKSPACE_SCAN = _sc("KSCAN_BACKSPACE", 42)
 MINUS_SCAN = _sc("KSCAN_MINUS", 45)
 DIGIT_SCANS = {
+    # верхний ряд
     _sc("KSCAN_0", 39): "0", _sc("KSCAN_1", 30): "1", _sc("KSCAN_2", 31): "2",
     _sc("KSCAN_3", 32): "3", _sc("KSCAN_4", 33): "4", _sc("KSCAN_5", 34): "5",
     _sc("KSCAN_6", 35): "6", _sc("KSCAN_7", 36): "7", _sc("KSCAN_8", 37): "8",
     _sc("KSCAN_9", 38): "9",
+    # цифровая клавиатура (NumPad) справа от Enter
+    _sc("KSCAN_KP_0", 98): "0", _sc("KSCAN_KP_1", 89): "1",
+    _sc("KSCAN_KP_2", 90): "2", _sc("KSCAN_KP_3", 91): "3",
+    _sc("KSCAN_KP_4", 92): "4", _sc("KSCAN_KP_5", 93): "5",
+    _sc("KSCAN_KP_6", 94): "6", _sc("KSCAN_KP_7", 95): "7",
+    _sc("KSCAN_KP_8", 96): "8", _sc("KSCAN_KP_9", 97): "9",
+    _sc("KSCAN_KP_MINUS", 86): "-",
 }
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

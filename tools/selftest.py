@@ -197,6 +197,22 @@ keys_sc = set(M.KEY_ACTIONS)
 check("движение задано скан-кодами (<= 512), а не кодами символов",
       all(0 <= k < 512 for k in keys_sc), str(sorted(keys_sc)))
 
+# Цифровая клавиатура справа от Enter шлёт СВОИ скан-коды: без них ответ,
+# набранный на ней, до игры не доходил.
+kpad = {98: "0", 89: "1", 90: "2", 91: "3", 92: "4",
+        93: "5", 94: "6", 95: "7", 96: "8", 97: "9"}
+top_row = {39: "0", 30: "1", 31: "2", 32: "3", 33: "4",
+           34: "5", 35: "6", 36: "7", 37: "8", 38: "9"}
+check("цифры принимаются и с верхнего ряда, и с цифровой клавиатуры",
+      all(M.DIGIT_SCANS.get(sc) == ch for sc, ch in kpad.items())
+      and all(M.DIGIT_SCANS.get(sc) == ch for sc, ch in top_row.items()),
+      "KP-1=%s, 1=%s, KP-0=%s, 0=%s" % (M.DIGIT_SCANS.get(89), M.DIGIT_SCANS.get(30),
+                                        M.DIGIT_SCANS.get(98), M.DIGIT_SCANS.get(39)))
+check("ввод ответа задан скан-кодами (<= 512)",
+      all(0 <= k < 512 for k in M.DIGIT_SCANS), str(sorted(M.DIGIT_SCANS)))
+check("коды цифр с двух клавиатур не конфликтуют между собой",
+      len(set(kpad) & set(top_row)) == 0 and M.DIGIT_SCANS.get(86) == "-")
+
 # то же самое через реальные события: W под русской раскладкой идёт с key=1094
 inp = M.Input()
 inp.handle(pygame.event.Event(pygame.KEYDOWN, key=1094, scancode=26, mod=0, unicode="ц"))
@@ -601,6 +617,27 @@ check("верный ответ отбивает выстрел и возвращ
       solved_all and d.state == "player_turn" and d.solved == 1
       and ("shot_repelled", d.target) in d.take_events(),
       "состояние %s, решено %d" % (d.state, d.solved))
+
+# ответ принимается СРАЗУ при наборе, без Ввода — и с цифровой клавиатуры
+kp_of = {ch: sc for sc, ch in kpad.items()}
+d_kp = D.Duel(Doll(), rng=random.Random(1))
+d_kp.player_fire()
+d_kp.update(DUEL_PAUSE + 0.01)
+ans_kp = str(d_kp.problem.answer)
+accepted_on = None
+for i, ch in enumerate(ans_kp):
+    if d_kp.type_digit(M.DIGIT_SCANS[kp_of[ch]]):
+        accepted_on = i
+check("ответ принимается сразу при наборе, без Ввода",
+      accepted_on == len(ans_kp) - 1 and d_kp.state == "player_turn",
+      "ответ %s, принят на %d-й цифре из %d" % (ans_kp, accepted_on + 1, len(ans_kp)))
+
+d_one = D.Duel(Doll(), rng=random.Random(1))
+d_one.problem = D.Problem(2, 3)           # ответ 5 — однозначный
+d_one.state = "enemy_asking"
+check("однозначный ответ отбивает выстрел первой же цифрой",
+      d_one.type_digit("5") is True and d_one.state == "player_turn",
+      "состояние %s" % d_one.state)
 
 # просроченный ответ: игрок гибнет
 d = D.Duel(Doll(), rng=random.Random(1))
