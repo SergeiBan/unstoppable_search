@@ -14,6 +14,7 @@ class World:
         self.cx = (self.sx0 + self.sx1) * 0.5
         self.cy = (self.sy0 + self.sy1) * 0.5
         self.blockers = set()        # клетки, занятые кораблями (не станцией)
+        self.planet = None           # планета-шар: твёрдое тело (см. planet.py)
 
     def height(self, gx, gy):
         """Высота клетки: базовая или надстройка-«хребет» вдоль оси Y.
@@ -39,8 +40,10 @@ class World:
             self.blockers.discard((int(c[0]), int(c[1])))
 
     def solid(self, gx, gy):
-        """Занята ли клетка: корпусом станции или стоящим кораблём."""
+        """Занята ли клетка: корпусом станции, стоящим кораблём или планетой."""
         if (gx, gy) in self.blockers:
+            return True
+        if self.planet is not None and self.planet.contains(gx + 0.5, gy + 0.5):
             return True
         return self.sx0 <= gx < self.sx1 and self.sy0 <= gy < self.sy1
 

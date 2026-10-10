@@ -268,6 +268,61 @@ def _poly(canvas, cam, quad, u0, v0, u1, v1, color, outline=True):
 FACE_COL = {"s": C_HULL, "n": C_HULL_DD, "w": C_PANEL, "e": C_HULL_D}
 
 
+def clip_frame(pts):
+    """Отсечение экранного полигона по прямоугольнику кадра.
+
+    Без него грани, уехавшие за край, отдаются SDL координатами в сотни тысяч
+    пикселей, и кадр дорожает в десятки раз: у планеты у поверхности так уезжают
+    почти все грани (замер: 60 мс на кадр вместо 0,9). У станции грани мелкие,
+    ей хватало проверки габарита, а шару нужна настоящая обрезка.
+    """
+    for axis, lim, keep_greater in ((0, 0.0, True), (0, float(CANVAS_W), False),
+                                    (1, 0.0, True), (1, float(CANVAS_H), False)):
+        out = []
+        n = len(pts)
+        if not n:
+            return []
+        for i in range(n):
+            a = pts[i]
+            b = pts[(i + 1) % n]
+            ia = a[axis] >= lim if keep_greater else a[axis] <= lim
+            ib = b[axis] >= lim if keep_greater else b[axis] <= lim
+            if ia:
+                out.append(a)
+            if ia != ib:
+                d = b[axis] - a[axis]
+                k = 0.0 if abs(d) < 1e-12 else (lim - a[axis]) / d
+                out.append((a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k))
+        pts = out
+    return pts
+
+
+def draw_planet(canvas, cam, planet):
+    """Планета: настоящий шар из полигонов.
+
+    Грани приходят уже в координатах камеры и уже отобранными по лицевой
+    стороне (у выпуклого тела задние закрыты передними — сортировка не нужна).
+    Дальше то же, что и со станцией: отсечение по ближней плоскости, обрезка по
+    кадру, заливка и дублирующий контур ТОГО ЖЕ цвета — без него между гранями
+    лезут волосяные щели. Не путать с planet_surface: тот рисует далёкие
+    планеты фона.
+    """
+    if not planet.visible(cam):
+        return                                         # планеты в кадре нет вовсе
+    for pts, col, edge in planet.faces(cam):
+        poly = cam_poly(cam, pts)
+        if poly is None:
+            continue
+        # Обрезка по кадру обязательна: без неё грани уходят в SDL координатами
+        # в десятки тысяч пикселей (16.16 fixed point), и он мажет мусором —
+        # кадр дорожал до 60 мс, а шар в упор выходил полоской вместо поверхности.
+        poly = clip_frame(poly)
+        if len(poly) < 3:
+            continue
+        pygame.draw.polygon(canvas, col, poly)
+        pygame.draw.polygon(canvas, edge, poly, 1)
+
+
 def draw_station(canvas, cam, world, t):
     faces = station_faces(world, cam)
     half_w = (world.sx1 - world.sx0) * 0.5
@@ -492,11 +547,16 @@ def draw_radar(canvas, ship, world, t, patrols=None):
     pf.draw(canvas, "РАДАР", x0, y0 - 9, C_HUD_DIM)
 
 
-def draw_hud(canvas, ship, world, t, fps=None):
+def draw_hud(canvas, ship, world, t, fps=None, planet=None):
     d = world.dist_to_station(ship.fx, ship.fy)
+    label = "ДО СТАНЦИИ "
+    if planet is not None:
+        dp = planet.dist_to(ship.fx, ship.fy)
+        if dp < d:                       # планета ближе — показываем её
+            d, label = dp, "ДО ПЛАНЕТЫ "
     x = 44
     y = 147
-    pf.draw(canvas, "ДО СТАНЦИИ " + _ru(d, 5) + " КЛ", x, y, C_HUD_TXT, shadow=(0, 0, 0))
+    pf.draw(canvas, label + _ru(d, 5) + " КЛ", x, y, C_HUD_TXT, shadow=(0, 0, 0))
     pf.draw(canvas, "КУРС %03d°  ХОД %d" % (ship.yaw, ship.steps), x, y + 11,
             C_HUD_TXT, shadow=(0, 0, 0))
     pf.draw(canvas, "A D < > ПОВОРОТ 45   Q E СНОС", x, y + 22, C_HUD_DIM,
@@ -659,17 +719,31 @@ def draw_duel(canvas, cam, fight, ship, t):
         pygame.draw.rect(canvas, bar, (bx, 129, w, 2))
 
 
-def draw_frame(canvas, world, ship, stars, t, fps=None, patrols=None, fight=None):
+def draw_frame(canvas, world, ship, stars, t, fps=None, patrols=None, fight=None,
+               planet=None):
     cam = Camera(ship.fx, ship.fy, ship.fyaw)
     draw_space(canvas, cam, stars, t)
+    # Планета огромная, поэтому порядок зависит от того, по какую сторону от неё
+    # мы находимся: обычно она дальше станции (фон), но если игрок улетел за неё,
+    # то ближе — и должна перекрывать и станцию, и корабли.
+    planet_front = None
+    if planet is not None:
+        d_st = math.hypot(world.cx - cam.x, world.cy - cam.y)
+        d_pl = math.hypot(planet.cx - cam.x, planet.cy - cam.y)
+        if d_pl < d_st:
+            planet_front = planet
+        else:
+            draw_planet(canvas, cam, planet)
     draw_station(canvas, cam, world, t)
     if patrols:
         draw_patrols(canvas, cam, world, patrols, t)
     if fight is not None:
         draw_duel(canvas, cam, fight, ship, t)
+    if planet_front is not None:
+        draw_planet(canvas, cam, planet_front)
     draw_reticle(canvas)
     draw_capture_frame(canvas, cam, world, ship)
     draw_cockpit(canvas, t)
     draw_radar(canvas, ship, world, t, patrols)
-    draw_hud(canvas, ship, world, t, fps)
+    draw_hud(canvas, ship, world, t, fps, planet=planet)
     return cam

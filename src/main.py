@@ -67,6 +67,7 @@ from config import (CANVAS_H, CANVAS_W, C_PATROL_A, C_PATROL_B, DUEL_PAUSE,
                     SHIP_START_YAW, TURN_STEP)
 from patrol import hidden as patrol_hidden
 from patrol import make_patrols, make_standing
+from planet import make_planet
 from ship import Ship
 from world import World
 
@@ -82,7 +83,10 @@ def build_state(seed=20261007):
     faction = D.Faction("патруль")
     for p in patrols + [standing]:
         p.faction = faction
-    return world, ship, stars, patrols, standing
+    # Планета к югу от станции — твёрдое тело: в неё не влететь (world.solid).
+    planet = make_planet(world)
+    world.planet = planet
+    return world, ship, stars, patrols, standing, planet
 
 
 def engage(fight, ships, target, dead):
@@ -171,7 +175,7 @@ def run_window(args):
         screen = pygame.display.set_mode((CANVAS_W * k, CANVAS_H * k), pygame.RESIZABLE)
     pygame.display.set_caption("unstoppable_search")
     canvas = new_canvas()
-    world, ship, stars, patrols, standing = build_state(args.seed)
+    world, ship, stars, patrols, standing, planet = build_state(args.seed)
     clock = pygame.time.Clock()
     t = 0.0
     show_fps = bool(args.fps)
@@ -283,7 +287,7 @@ def run_window(args):
         render.draw_frame(canvas, world, ship, stars, t,
                           int(clock.get_fps()) if show_fps else None,
                           patrols=[p for p in ships if id(p) not in dead],
-                          fight=fight)
+                          fight=fight, planet=planet)
         present(screen, canvas)
         pygame.display.flip()
         if args.save_frame:
@@ -301,7 +305,7 @@ def run_shots(args):
     pygame.init()
     pygame.display.set_mode((CANVAS_W, CANVAS_H))
     canvas = new_canvas()
-    world, ship, stars, patrols, standing = build_state(args.seed)
+    world, ship, stars, patrols, standing, planet = build_state(args.seed)
     out = args.shots
     os.makedirs(out, exist_ok=True)
     dt = 1.0 / FPS
@@ -320,7 +324,7 @@ def run_shots(args):
         for p in patrols:
             p.update(dt, (ship.fx, ship.fy), at_war)
         render.draw_frame(canvas, world, ship, stars, t[0],
-                          patrols=patrols + [standing], fight=fight)
+                          patrols=patrols + [standing], fight=fight, planet=planet)
 
     def shot(label):
         ship.snap()
@@ -442,6 +446,13 @@ def run_shots(args):
             p.update(1.0 / FPS, (ship.fx, ship.fy), True)
     draw()
     shot("19_патрули_идут_на_игрока")
+    # планета-шар: издалека, вблизи и сбоку вдоль поверхности
+    ship.gx, ship.gy, ship.yaw = 58, 30, 180
+    shot("20_планета_впереди")
+    ship.gx, ship.gy, ship.yaw = 58, -232, 180
+    shot("21_подлёт_к_планете")
+    ship.gx, ship.gy, ship.yaw = 58, -349, 90
+    shot("22_у_планеты_вбок")
 
     print("каталог снимков: %s" % os.path.abspath(out))
     print("станция: %d x %d = %d клеток, квадрат=%s" % (

@@ -19,12 +19,13 @@ pygame.init()
 pygame.display.set_mode((10, 10))
 
 import pixel_font as pf
+import planet as planet_mod
 import render
 from config import (ATTACK_STANDOFF, CANVAS_H, CANVAS_W, C_PATROL_D, C_WARN,
                     C_WIN, DEATH_PAUSE, DUEL_PATIENCE, DUEL_PAUSE, DUEL_RANGE,
-                    DUEL_TIME, FOCAL, FPS, PATROL_H, PATROL_R, SHIP_START_GX,
-                    SHIP_START_GY, SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT,
-                    TURN_STEP)
+                    DUEL_TIME, FOCAL, FPS, HZ, PATROL_H, PATROL_R, PLANET_DIST,
+                    PLANET_LAT, PLANET_LON, SHIP_START_GX, SHIP_START_GY,
+                    SHIP_START_YAW, STEP_REPEAT, TURN_REPEAT, TURN_STEP)
 from ship import Ship
 from world import World
 
@@ -847,6 +848,101 @@ left_top = all(m[0] < pp[0] and m[1] < pp[1] for m in marks)
 check("метка врага — один уголок слева сверху, а не четыре",
       len(marks) >= 6 and len(marks) <= 14 and left_top,
       "пикселей метки %d, все слева сверху: %s" % (len(marks), left_top))
+
+# --- планета (шар из полигонов) -----------------------------------------
+wpl = World()
+pl = planet_mod.make_planet(wpl)
+wpl.planet = pl
+check("планета: центр в 500 кл от кромки станции, диаметр 200 кл",
+      abs(wpl.dist_to_station(pl.cx, pl.cy) - PLANET_DIST) < 1e-6
+      and abs(pl.r * 2 - 200.0) < 1e-9,
+      "до центра %.1f кл, диаметр %.0f кл"
+      % (wpl.dist_to_station(pl.cx, pl.cy), pl.r * 2))
+check("планета твёрдая: вглубь не пройти, рядом свободно",
+      wpl.solid(int(pl.cx), int(pl.cy)) and wpl.solid(int(pl.cx), int(pl.cy - pl.r + 1))
+      and not wpl.solid(int(pl.cx), int(pl.cy - pl.r - 3)),
+      "центр и кромка твёрдые, 2 кл над кромкой свободно")
+
+mesh_pl = pl.mesh(PLANET_LAT, PLANET_LON)
+worst_v = max(abs(math.sqrt(sum(c * c for c in v)) - 1.0) for tri, n in mesh_pl for v in tri)
+worst_n = max(abs(math.sqrt(sum(c * c for c in n)) - 1.0) for tri, n in mesh_pl)
+out_bad = 0
+for tri, n in mesh_pl:
+    c = [sum(v[i] for v in tri) / 3.0 for i in range(3)]
+    if n[0] * c[0] + n[1] * c[1] + n[2] * c[2] <= 0.0:
+        out_bad += 1
+check("сетка шара: вершины на сфере, нормали единичные и наружу",
+      worst_v < 1e-9 and worst_n < 1e-9 and out_bad == 0,
+      "треугольников %d, отклонение вершин %.0e, нормалей %.0e, не наружу — %d"
+      % (len(mesh_pl), worst_v, worst_n, out_bad))
+
+
+def _pl_truth(cam_s, xx, yy):
+    """Истина: пересекает ли луч из камеры настоящий шар (не многогранник)."""
+    xc, yc, zc = cam_s.to_cam(pl.cx, pl.cy, pl.h)
+    dx = (xx + 0.5 - CANVAS_W * 0.5) / FOCAL
+    dy = -(yy + 0.5 - HZ) / FOCAL
+    a = dx * dx + dy * dy + 1.0
+    b = 2.0 * (dx * xc + dy * yc + zc)
+    c = xc * xc + yc * yc + zc * zc - pl.r * pl.r
+    disc = b * b - 4.0 * a * c
+    return disc > 0.0 and (b - math.sqrt(disc)) / (2.0 * a) > 0.0
+
+
+_cvp = pygame.Surface((CANVAS_W, CANVAS_H))
+_cvq = pygame.Surface((CANVAS_W, CANVAS_H))
+
+
+def _pl_match(dist, yaw):
+    """Сверяем нарисованное с истиной по лучу (область без кабины и HUD)."""
+    cam_s = render.Camera(pl.cx, pl.cy + pl.r + dist, yaw)
+    sh_s = Ship(int(pl.cx), int(pl.cy + pl.r + dist), yaw)
+    sh_s.snap()
+    render.draw_frame(_cvp, wpl, sh_s, stars_s, 1.0, planet=pl)
+    render.draw_frame(_cvq, wpl, sh_s, stars_s, 1.0, planet=None)
+    ok = tot = 0
+    for yy in range(12, 140, 2):
+        for xx in range(40, 280, 2):
+            drawn = _cvp.get_at((xx, yy)) != _cvq.get_at((xx, yy))
+            ok += 1 if drawn == _pl_truth(cam_s, xx, yy) else 0
+            tot += 1
+    return 100.0 * ok / tot
+
+
+for _dist, _yaw, _name in ((40.0, 180, "40 кл в лоб"), (22.0, 180, "22 кл в лоб"),
+                           (3.0, 180, "3 кл в лоб"), (10.0, 90, "10 кл вдоль"),
+                           (3.0, 90, "3 кл вдоль"), (0.5, 90, "вплотную вдоль"),
+                           (3.0, 135, "3 кл вкось"), (3.0, 0, "3 кл прочь"),
+                           (300.0, 90, "300 кл вбок")):
+    _m = _pl_match(_dist, _yaw)
+    # Порог 88%, а не 100: шар набран ВПИСАННЫМИ треугольниками (фасетки —
+    # хорды), поэтому его силуэт чуть меньше настоящей сферы. Вплотную видно
+    # всего одну грань, и разница с гладким шаром доходит до 10%.
+    check("шар из полигонов (%s) сходится с расчётом луч-сфера" % _name,
+          _m > 88.0, "совпадение %.0f%%" % _m)
+
+# вплотную к планете обязано остаться небо — иначе опять «вижу только планету»
+sh_sky = Ship(int(pl.cx), int(pl.cy + pl.r + 3), 90)
+sh_sky.snap()
+render.draw_frame(_cvp, wpl, sh_sky, stars_s, 1.0, planet=pl)
+render.draw_frame(_cvq, wpl, sh_sky, stars_s, 1.0, planet=None)
+_sky = _tot = 0
+for yy in range(12, 140):
+    for xx in range(40, 280):
+        _tot += 1
+        if _cvp.get_at((xx, yy)) == _cvq.get_at((xx, yy)):
+            _sky += 1
+_sky_pct = 100.0 * _sky / _tot
+check("рядом с планетой в кадре остаётся небо", 40.0 < _sky_pct < 85.0,
+      "небо %.0f%% кадра, планета %.0f%%" % (_sky_pct, 100.0 - _sky_pct))
+
+# планета за спиной не рисуется вовсе
+sh_back = Ship(int(pl.cx), int(pl.cy + pl.r + 3), 0)
+sh_back.snap()
+cam_back = render.Camera(sh_back.fx, sh_back.fy, sh_back.fyaw)
+check("планета за спиной не рисуется",
+      not pl.visible(cam_back) and pl.faces(cam_back) == [],
+      "видимых граней нет, когда смотрим прочь")
 
 # --- шрифт --------------------------------------------------------------
 hud = ["ДО СТАНЦИИ 17,5 КЛ", "КУРС 045°  ХОД 65",
